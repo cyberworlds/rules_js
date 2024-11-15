@@ -486,10 +486,13 @@ def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_pre
         "{{workspace_name}}": ctx.workspace_name,
     }
 
-    # The '_' avoids collisions with another file matching the label name.
-    # For example, test and test/my.spec.ts. This naming scheme is borrowed from rules_go:
-    # https://github.com/bazelbuild/rules_go/blob/f3cc8a2d670c7ccd5f45434ab226b25a76d44de1/go/private/context.bzl#L144
-    launcher = ctx.actions.declare_file("{}_/{}".format(ctx.label.name, ctx.label.name))
+    # NOTE(calebmer): Revert [breaking change which removes `.sh` extension][1]
+    # from binary executable file. Instead `rules_js` chose to use a weird
+    # `{label}_/{label}` format. We don't find the argument for making this change
+    # compelling and we're worried about how this will break our code.
+    #
+    # [1]: https://github.com/aspect-build/rules_js/pull/1586
+    launcher = ctx.actions.declare_file("{}.sh".format(ctx.label.name))
     ctx.actions.expand_template(
         template = ctx.file._launcher_template,
         output = launcher,

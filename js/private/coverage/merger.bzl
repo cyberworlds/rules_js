@@ -31,10 +31,13 @@ def _coverage_merger_impl(ctx):
         # TODO(3.0): drop support for deprecated toolchain attributes
         node_path = _deprecated_target_tool_path_to_short_path(nodeinfo.target_tool_path)
 
-    # The '_' avoids collisions with another file matching the label name.
-    # For example, test and test/my.spec.ts. This naming scheme is borrowed from rules_go:
-    # https://github.com/bazelbuild/rules_go/blob/f3cc8a2d670c7ccd5f45434ab226b25a76d44de1/go/private/context.bzl#L144
-    bash_launcher = ctx.actions.declare_file("{}_/{}".format(ctx.label.name, ctx.label.name))
+    # NOTE(calebmer): Revert [breaking change which removes `.sh` extension][1]
+    # from binary executable file. Instead `rules_js` chose to use a weird
+    # `{label}_/{label}` format. We don't find the argument for making this change
+    # compelling and we're worried about how this will break our code.
+    #
+    # [1]: https://github.com/aspect-build/rules_js/pull/1586
+    bash_launcher = ctx.actions.declare_file("{}.sh".format(ctx.label.name))
     ctx.actions.expand_template(
         template = ctx.file._launcher_template,
         output = bash_launcher,

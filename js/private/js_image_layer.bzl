@@ -267,7 +267,14 @@ source {real_binary_path}
 
 def _write_laucher(ctx, real_binary_path):
     "Creates a call-through shell entrypoint which sets BAZEL_BINDIR to '.' then immediately invokes the original entrypoint."
-    launcher = ctx.actions.declare_file("%s_launcher" % ctx.label.name)
+
+    # NOTE(calebmer): Revert [breaking change which removes `.sh` extension][1]
+    # from binary executable file. Instead `rules_js` chose to use a weird
+    # `{label}_/{label}` format. We don't find the argument for making this change
+    # compelling and we're worried about how this will break our code.
+    #
+    # [1]: https://github.com/aspect-build/rules_js/pull/1586
+    launcher = ctx.actions.declare_file("%s_launcher.sh" % ctx.label.name)
     ctx.actions.write(
         output = launcher,
         content = _LAUNCHER_TMPL.format(real_binary_path = real_binary_path),
