@@ -1,5 +1,5 @@
-load("@aspect_rules_js//npm:defs.bzl", "npm_package")
 load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_js//npm:defs.bzl", "npm_package")
 
 # A named package depending on another named package and a js_library()
 
@@ -8,6 +8,7 @@ js_library(
     srcs = ["index.js"],
     data = [
         "//lib:lib_pkg",
+        "//pkg:lib_pkg",
     ],
     visibility = ["//visibility:private"],
     deps = [
@@ -18,7 +19,6 @@ js_library(
 npm_package(
     name = "wrapper-lib_pkg",
     srcs = [":js"],
-    include_runfiles = False,
     package = "@e2e/wrapper-lib",
     visibility = ["//visibility:public"],
 )

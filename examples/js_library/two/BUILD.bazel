@@ -1,6 +1,6 @@
-load(":tsc.bzl", "tsc")
 load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load(":tsc.bzl", "tsc")
 
 tsc(
     name = "two",
@@ -13,7 +13,7 @@ tsc(
     outs = [
         "two.js",
     ],
-    include_declarations = True,
+    include_types = True,
 )
 
 js_test(

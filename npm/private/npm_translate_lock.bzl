@@ -9,7 +9,7 @@ load("@aspect_rules_js//npm:repositories.bzl", "npm_translate_lock")
 These use Bazel's downloader to fetch the packages.
 You can use this to redirect all fetches through a store like Artifactory.
 
-See <https://blog.aspect.dev/configuring-bazels-downloader> for more info about how it works
+See <https://blog.aspect.build/configuring-bazels-downloader> for more info about how it works
 and how to configure it.
 
 [`npm_translate_lock`](#npm_translate_lock) is the primary user-facing API.
@@ -25,17 +25,17 @@ Advanced users may want to directly fetch a package from npm rather than start f
 [`npm_import`](./npm_import) does this.
 """
 
-load("@bazel_skylib//lib:paths.bzl", "paths")
-load("@aspect_bazel_lib//lib:repositories.bzl", _register_copy_directory_toolchains = "register_copy_directory_toolchains", _register_copy_to_directory_toolchains = "register_copy_to_directory_toolchains", _register_tar_toolchains = "register_tar_toolchains", _register_yq_toolchains = "register_yq_toolchains")
+load("@aspect_bazel_lib//lib:utils.bzl", bazel_lib_utils = "utils")
 load("@aspect_bazel_lib//lib:write_source_files.bzl", "write_source_file")
+load("@bazel_skylib//lib:paths.bzl", "paths")
 load(":list_sources.bzl", "list_sources")
 load(":npm_translate_lock_generate.bzl", "generate_repository_files")
 load(":npm_translate_lock_helpers.bzl", "helpers")
 load(":npm_translate_lock_macro_helpers.bzl", macro_helpers = "helpers")
 load(":npm_translate_lock_state.bzl", "DEFAULT_ROOT_PACKAGE", "npm_translate_lock_state")
-load(":pnpm_repository.bzl", "LATEST_PNPM_VERSION", _pnpm_repository = "pnpm_repository")
-load(":utils.bzl", "utils")
+load(":pnpm_repository.bzl", "DEFAULT_PNPM_VERSION", _pnpm_repository = "pnpm_repository")
 load(":transitive_closure.bzl", "translate_to_transitive_closure")
+load(":utils.bzl", "utils")
 
 RULES_JS_FROZEN_PNPM_LOCK_ENV = "ASPECT_RULES_JS_FROZEN_PNPM_LOCK"
 
@@ -77,7 +77,6 @@ _ATTRS = {
     "root_package": attr.string(default = DEFAULT_ROOT_PACKAGE),
     "update_pnpm_lock": attr.bool(),
     "use_home_npmrc": attr.bool(),
-    "use_starlark_yaml_parser": attr.bool(),
     "verify_node_modules_ignored": attr.label(),
     "verify_patches": attr.label(),
     "yarn_lock": attr.label(),
@@ -104,21 +103,19 @@ def _npm_translate_lock_impl(rctx):
         if state.action_cache_miss():
             _fail_if_frozen_pnpm_lock(rctx, state)
             if _update_pnpm_lock(rctx, state):
-                if rctx.attr.bzlmod:
-                    msg = """
+                msg = """
 
 INFO: {} file updated. Please run your build again.
 
 See https://github.com/aspect-build/rules_js/issues/1445
 """.format(state.label_store.relative_path("pnpm_lock"))
-                    fail(msg)
-                else:
-                    # If the pnpm lock file was changed then reload it before translation
-                    state.reload_lockfile()
+                fail(msg)
 
     helpers.verify_node_modules_ignored(rctx, state.importers(), state.root_package())
 
     helpers.verify_patches(rctx, state)
+
+    helpers.verify_lifecycle_hooks_specified(rctx, state)
 
     rctx.report_progress("Translating {}".format(state.label_store.relative_path("pnpm_lock")))
 
@@ -138,6 +135,7 @@ See https://github.com/aspect-build/rules_js/issues/1445
         importers,
         packages,
         state.patched_dependencies(),
+        state.only_built_dependencies(),
         state.root_package(),
         state.default_registry(),
         state.npm_registries(),
@@ -155,7 +153,7 @@ def npm_translate_lock(
         pnpm_lock = None,
         npm_package_lock = None,
         yarn_lock = None,
-        update_pnpm_lock = None,
+        update_pnpm_lock = False,
         node_toolchain_prefix = "nodejs",
         yq_toolchain_prefix = "yq",
         preupdate = [],
@@ -184,19 +182,9 @@ def npm_translate_lock(
         quiet = True,
         external_repository_action_cache = utils.default_external_repository_action_cache(),
         link_workspace = None,
-        pnpm_version = LATEST_PNPM_VERSION,
+        pnpm_version = DEFAULT_PNPM_VERSION,
         use_pnpm = None,
-        register_copy_directory_toolchains = True,
-        register_copy_to_directory_toolchains = True,
-        register_yq_toolchains = True,
-        register_tar_toolchains = True,
-        npm_package_target_name = "{dirname}",
-        use_starlark_yaml_parser = False,
-        # TODO(2.0): remove package_json
-        package_json = None,
-        # TODO(2.0): remove warn_on_unqualified_tarball_url
-        # buildifier: disable=unused-variable
-        warn_on_unqualified_tarball_url = None,
+        npm_package_target_name = "pkg",
         **kwargs):
     """Repository macro to generate starlark code from a lock file.
 
@@ -505,73 +493,21 @@ def npm_translate_lock(
 
         pnpm_version: pnpm version to use when generating the @pnpm repository. Set to None to not create this repository.
 
-            Can be left unspecified and the rules_js default `LATEST_PNPM_VERSION` will be used.
+            Can be left unspecified and the rules_js default `DEFAULT_PNPM_VERSION` will be used.
 
         use_pnpm: label of the pnpm entry point to use.
 
-        register_copy_directory_toolchains: if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_copy_directory_toolchains()` is called if the toolchain is not already registered
+        npm_package_target_name: The name of linked `npm_package`, `js_library` or `JsInfo` producing targets.
 
-        register_copy_to_directory_toolchains: if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_copy_to_directory_toolchains()` is called if the toolchain is not already registered
-
-        register_yq_toolchains: if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_yq_toolchains()` is called if the toolchain is not already registered
-
-        register_tar_toolchains: if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_tar_toolchains()` is called if the toolchain is not already registered
-
-        package_json: Deprecated.
-
-            Add all `package.json` files that are part of the workspace to `data` instead.
-
-        warn_on_unqualified_tarball_url: Deprecated. Will be removed in next major release.
-
-        npm_package_target_name: The name of linked `npm_package` targets. When `npm_package` targets are linked as pnpm workspace
-            packages, the name of the target must align with this value.
+            When targets are linked as pnpm workspace packages, the name of the target must align with this value.
 
             The `{dirname}` placeholder is replaced with the directory name of the target.
 
-            By default the directory name of the target is used.
-
-            Default: `{dirname}`
-
-        use_starlark_yaml_parser: Opt-out of using `yq` to parse the pnpm-lock file which was added
-            in https://github.com/aspect-build/rules_js/pull/1458 and use the legacy starlark yaml
-            parser instead.
-
-            This opt-out is a return safety in cases where yq is not able to parse the pnpm generated
-            yaml file. For example, this has been observed to happen due to a line such as the following
-            in the pnpm generated lock file:
-
-            ```
-            resolution: {tarball: https://gitpkg.vercel.app/blockprotocol/blockprotocol/packages/%40blockprotocol/type-system-web?6526c0e}
-            ```
-
-            where the `?` character in the `tarball` value causes `yq` to fail with:
-
-            ```
-            $ yq pnpm-lock.yaml -o=json
-            Error: bad file 'pnpm-lock.yaml': yaml: line 7129: did not find expected ',' or '}'
-            ```
-
-            If the tarball value is quoted or escaped then yq would accept it but as of this writing, the latest
-            version of pnpm (8.14.3) does not quote or escape such a value and the latest version of yq (4.40.5)
-            does not handle it as is.
-
-            Possibly related to https://github.com/pnpm/pnpm/issues/5414.
-
         **kwargs: Internal use only
     """
-
-    # TODO(2.0): remove backward compat support for update_pnpm_lock_node_toolchain_prefix
-    update_pnpm_lock_node_toolchain_prefix = kwargs.pop("update_pnpm_lock_node_toolchain_prefix", None)
-
-    # TODO(2.0): move this to a new required rules_js_repositories() WORKSPACE function
-    if register_copy_directory_toolchains and not native.existing_rule("copy_directory_toolchains"):
-        _register_copy_directory_toolchains()
-    if register_copy_to_directory_toolchains and not native.existing_rule("copy_to_directory_toolchains"):
-        _register_copy_to_directory_toolchains()
-    if register_yq_toolchains and not native.existing_rule("yq_toolchains"):
-        _register_yq_toolchains()
-    if register_tar_toolchains and not native.existing_rule("tar_toolchains"):
-        _register_tar_toolchains()
+    if not bazel_lib_utils.is_bazel_6_or_greater():
+        # ctx.actions.declare_symlink was added in Bazel 6
+        fail("A minimum version of Bazel 6 required to use rules_js")
 
     # Gather undocumented attributes
     root_package = kwargs.pop("root_package", None)
@@ -579,13 +515,12 @@ def npm_translate_lock(
     repositories_bzl_filename = kwargs.pop("repositories_bzl_filename", None)
     defs_bzl_filename = kwargs.pop("defs_bzl_filename", None)
     generate_bzl_library_targets = kwargs.pop("generate_bzl_library_targets", None)
-    bzlmod = kwargs.pop("bzlmod", False)
 
     if len(kwargs):
         msg = "Invalid npm_translate_lock parameter '{}'".format(kwargs.keys()[0])
         fail(msg)
 
-    if not bzlmod and pnpm_version != None:
+    if pnpm_version != None:
         _pnpm_repository(name = "pnpm", pnpm_version = pnpm_version)
 
     if yarn_lock:
@@ -593,14 +528,6 @@ def npm_translate_lock(
 
     if npm_package_lock:
         data = data + [npm_package_lock]
-
-    if package_json:
-        data = data + [package_json]
-
-        # buildifier: disable=print
-        print("""
-WARNING: `package_json` attribute in `npm_translate_lock(name = "{name}")` is deprecated. Add all package.json files to the `data` attribute instead.
-""".format(name = name))
 
     # convert bins to a string_list_dict to satisfy attr type in repository rule
     bins_string_list_dict = {}
@@ -620,11 +547,6 @@ WARNING: `package_json` attribute in `npm_translate_lock(name = "{name}")` is de
             bins_string_list_dict[key] = []
         for value_key, value_value in value.items():
             bins_string_list_dict[key].append("{}={}".format(value_key, value_value))
-
-    # Default update_pnpm_lock to True if npm_package_lock or yarn_lock is set to
-    # preserve pre-update_pnpm_lock `pnpm import` behavior.
-    if update_pnpm_lock == None and (npm_package_lock or yarn_lock):
-        update_pnpm_lock = True
 
     if not update_pnpm_lock and preupdate:
         fail("expected update_pnpm_lock to be True when preupdate are specified")
@@ -672,12 +594,11 @@ WARNING: `package_json` attribute in `npm_translate_lock(name = "{name}")` is de
         data = data,
         preupdate = preupdate,
         quiet = quiet,
-        node_toolchain_prefix = update_pnpm_lock_node_toolchain_prefix if update_pnpm_lock_node_toolchain_prefix else node_toolchain_prefix,
+        node_toolchain_prefix = node_toolchain_prefix,
         use_pnpm = use_pnpm,
         yq_toolchain_prefix = yq_toolchain_prefix,
         npm_package_target_name = npm_package_target_name,
-        use_starlark_yaml_parser = use_starlark_yaml_parser,
-        bzlmod = bzlmod,
+        bzlmod = False,
     )
 
 def list_patches(name, out = None, include_patterns = ["*.diff", "*.patch"], exclude_patterns = []):

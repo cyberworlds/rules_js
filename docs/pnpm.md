@@ -175,15 +175,17 @@ frequent lockfile or `package.json` changes. As a generated file manual resoluti
 is unnecessary as it should only be generated and updated by `npm_translate_lock`.
 To reduce the impact on developer workflows `git` can be configured to ignore merge conflicts using
 `.gitattributes` and a [custom merge driver](https://git-scm.com/docs/gitattributes#_defining_a_custom_merge_driver).
-See our [blog post](https://blog.aspect.dev/easier-merges-on-lockfiles) for a longer explanation.
+See our [blog post](https://blog.aspect.build/easier-merges-on-lockfiles) for a longer explanation.
 
 First, mark the `npm_translate_lock_<hash>` file (with `<hash>` replaced with the hash generated in your workspace)
 to use a custom custom merge driver, in this example named `ours`:
+
 ```
 .aspect/rules/external_repository_action_cache/npm_translate_lock_<hash>= merge=ours
 ```
 
 Second, developers must define the `ours` custom merge driver in their git configuration to always accept local change:
+
 ```
 git config --global merge.ours.driver true
 ```
@@ -192,7 +194,9 @@ git config --global merge.ours.driver true
 
 ### Patching via pnpm.patchedDependencies
 
-Patches included in [pnpm.patchedDependencies](https://pnpm.io/next/package_json#pnpmpatcheddependencies) are automatically applied. These patches must be included in the `data` attribute of `npm_translate_lock`, for example:
+Patches included in [pnpm.patchedDependencies](https://pnpm.io/next/package_json#pnpmpatcheddependencies) are automatically applied by rules_js.
+
+These patches must be included in the `data` attribute of `npm_translate_lock`, for example:
 
 ```json
 {
@@ -213,6 +217,12 @@ npm_translate_lock(
     ],
 )
 ```
+
+Patching applied by rules_js may slightly deviate from standard pnpm patching behavior.
+The [bazel-lib patch util](https://docs.aspect.build/rulesets/aspect_bazel_lib/docs/repo_utils/#patch)
+is used for patching within rules_js instead of the internal pnpm patching mechanism.
+For example a bad patch file may be partially applied when using pnpm outside of bazel but fail
+when applied by rules_js, see [rules_js #1915](https://github.com/aspect-build/rules_js/issues/1915).
 
 ### Patching via `patches` attribute
 
@@ -258,8 +268,16 @@ npm packages have "lifecycle scripts" such as `postinstall` which are documented
 
 We refer to these as "lifecycle hooks".
 
-> You can disable this feature completely by setting all packages to have no hooks, using
-> `lifecycle_hooks = { "*": [] }` in `npm_translate_lock`.
+The lifecycle hooks of a package are determined by the `package.json` [`pnpm.onlyBuiltDependencies` attribute](https://pnpm.io/package_json#pnpmonlybuiltdependencies).
+
+If `pnpm.onlyBuiltDependencies` is unspecified `npm_translate_lock` will fallback to the legacy pnpm lockfile `requiresBuild` attribute.
+This attribute is only available in pnpm _before_ v9, see [pnpm #7707](https://github.com/pnpm/pnpm/issues/7707) for reasons why this attribute was removed.
+
+When a package has lifecycle hooks the `lifecycle_*` attributes are applied to filter which hooks are run and how they are run.
+
+For example, you can restrict lifecycle hooks across all packages to only run `postinstall`:
+
+> `lifecycle_hooks = { "*": ["postinstall"] }` in `npm_translate_lock`.
 
 Because rules_js models the execution of these hooks as build actions, rather than repository rules,
 the result can be stored in the remote cache and shared between developers.

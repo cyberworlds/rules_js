@@ -1,14 +1,15 @@
 """npm_translate_lock state management abstraction so main impl is easier to read
 and maintain"""
 
-load("@bazel_skylib//lib:paths.bzl", "paths")
-load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@aspect_bazel_lib//lib:base64.bzl", "base64")
 load("@aspect_bazel_lib//lib:repo_utils.bzl", "repo_utils")
-load(":repository_label_store.bzl", "repository_label_store")
+load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("@bazel_skylib//lib:paths.bzl", "paths")
 load(":npm_translate_lock_helpers.bzl", "helpers")
-load(":utils.bzl", "INTERNAL_ERROR_MSG", "utils")
 load(":npmrc.bzl", "parse_npmrc")
+load(":pnpm.bzl", "pnpm")
+load(":repository_label_store.bzl", "repository_label_store")
+load(":utils.bzl", "INTERNAL_ERROR_MSG", "utils")
 
 NPM_RC_FILENAME = ".npmrc"
 PACKAGE_JSON_FILENAME = "package.json"
@@ -37,16 +38,6 @@ WARNING: `update_pnpm_lock` attribute in `npm_translate_lock(name = "{rctx_name}
 
     _init_patches_labels(priv, rctx, attr, label_store)
 
-    _init_root_package(priv, rctx, attr, label_store)
-
-    root_package_json_declared = label_store.has("package_json_root")
-    if root_package_json_declared and _should_update_pnpm_lock(priv):
-        # If we need to read the patches list from the package.json since
-        # update_pnpm_lock is enabled and the user has declared the root package.json
-        # as an input file then we can read it right away.
-        _init_patched_dependencies_labels(priv, rctx, attr, label_store)
-        priv["patched_dependencies_labels_initialized"] = True
-
     if _should_update_pnpm_lock(priv) or not attr.pnpm_lock:
         # labels only needed when updating or bootstrapping the pnpm lock file
         _init_pnpm_labels(priv, rctx, attr, label_store)
@@ -62,13 +53,10 @@ WARNING: `update_pnpm_lock` attribute in `npm_translate_lock(name = "{rctx_name}
     pnpm_lock_exists = is_windows or utils.exists(rctx, label_store.path("pnpm_lock"))
     if pnpm_lock_exists:
         _load_lockfile(priv, rctx, attr, label_store)
-
-    if not priv["patched_dependencies_labels_initialized"]:
-        # If we didn't initialize the patched dependency labels above then try again now. We'll either
-        # read the list of patches from the lock file now that it has been read or, if update_pnpm_lock
-        # is enabled, we can derive the existance of a root package.json by looking for a `.` importer
-        # in the `importers` list.
         _init_patched_dependencies_labels(priv, rctx, attr, label_store)
+
+    # May depend on lockfile state
+    _init_root_package(priv, rctx, attr, label_store)
 
     if _should_update_pnpm_lock(priv):
         _init_importer_labels(priv, label_store)
@@ -79,17 +67,6 @@ WARNING: `update_pnpm_lock` attribute in `npm_translate_lock(name = "{rctx_name}
 
     if _should_update_pnpm_lock(priv):
         _copy_update_input_files(priv, rctx, attr, label_store)
-        _copy_unspecified_input_files(priv, rctx, attr, label_store)
-
-def _reload_lockfile(priv, rctx, attr, label_store):
-    _load_lockfile(priv, rctx, attr, label_store)
-
-    if _should_update_pnpm_lock(priv):
-        _init_importer_labels(priv, label_store)
-
-    _init_root_package(priv, rctx, attr, label_store)
-
-    if _should_update_pnpm_lock(priv):
         _copy_unspecified_input_files(priv, rctx, attr, label_store)
 
 ################################################################################
@@ -157,9 +134,11 @@ def _init_pnpm_labels(priv, rctx, attr, label_store):
 
 ################################################################################
 def _init_update_labels(priv, _, attr, label_store):
+    pnpm_lock_label = label_store.label("pnpm_lock")
+    pnpm_lock_label_str = "//{}:{}".format(pnpm_lock_label.package, pnpm_lock_label.name)
     action_cache_path = paths.join(
         priv["external_repository_action_cache"],
-        PNPM_LOCK_ACTION_CACHE_PREFIX + base64.encode(utils.hash(helpers.to_apparent_repo_name(priv["rctx_name"]) + utils.consistent_label_str(label_store.label("pnpm_lock")))),
+        PNPM_LOCK_ACTION_CACHE_PREFIX + base64.encode(utils.hash(helpers.to_apparent_repo_name(priv["rctx_name"]) + pnpm_lock_label_str)),
     )
     label_store.add_root("action_cache", action_cache_path)
     for i, d in enumerate(attr.preupdate):
@@ -185,19 +164,13 @@ def _init_patches_labels(priv, _, attr, label_store):
         label_store.add("patches_{}".format(i), d)
 
     priv["num_patches"] = len(patches)
-    priv["patched_dependencies_labels_initialized"] = False
 
 ################################################################################
 def _init_patched_dependencies_labels(priv, _, attr, label_store):
-    if attr.update_pnpm_lock:
-        # Read patches from package.json `pnpm.patchedDependencies`
-        root_package_json = _root_package_json(priv)
-        patches = ["//%s:%s" % (label_store.label("pnpm_lock").package, patch) for patch in root_package_json.get("pnpm", {}).get("patchedDependencies", {}).values()]
-    else:
-        # Read patches from pnpm-lock.yaml `patchedDependencies`
-        patches = []
-        for patch_info in priv["patched_dependencies"].values():
-            patches.append("//%s:%s" % (label_store.label("pnpm_lock").package, patch_info.get("path")))
+    # Read patches from pnpm-lock.yaml `patchedDependencies`
+    patches = []
+    for patch_info in priv["patched_dependencies"].values():
+        patches.append("//%s:%s" % (label_store.label("pnpm_lock").package, patch_info.get("path")))
 
     # Convert patch label strings to labels
     patches = [attr.pnpm_lock.relative(p) for p in patches]
@@ -356,15 +329,10 @@ WARNING: Implicitly using package.json file `{package_json}` since the `{pnpm_lo
                 fail(msg)
             _copy_input_file(priv, rctx, attr, label_store, package_json_key)
 
-    if attr.update_pnpm_lock:
-        # Read patches from package.json `pnpm.patchedDependencies`
-        root_package_json = _root_package_json(priv)
-        pnpm_patches = root_package_json.get("pnpm", {}).get("patchedDependencies", {}).values()
-    else:
-        # Read patches from pnpm-lock.yaml `patchedDependencies`
-        pnpm_patches = []
-        for patch_info in priv["patched_dependencies"].values():
-            pnpm_patches.append(patch_info.get("path"))
+    # Read patches from pnpm-lock.yaml `patchedDependencies`
+    pnpm_patches = []
+    for patch_info in priv["patched_dependencies"].values():
+        pnpm_patches.append(patch_info.get("path"))
 
     num_patches = priv["num_patches"]
 
@@ -416,16 +384,21 @@ def _action_cache_miss(priv, rctx, label_store):
 
 ################################################################################
 def _write_action_cache(priv, rctx, label_store):
-    contents = [
-        "# @generated",
-        "# Input hashes for repository rule npm_translate_lock(name = \"{}\", pnpm_lock = \"{}\").".format(helpers.to_apparent_repo_name(priv["rctx_name"]), utils.consistent_label_str(label_store.label("pnpm_lock"))),
-        "# This file should be checked into version control along with the pnpm-lock.yaml file.",
-    ]
+    header = """# @generated
+# Input hashes for repository rule npm_translate_lock(name = \"{}\", pnpm_lock = \"{}\").
+# This file should be checked into version control along with the pnpm-lock.yaml file.
+""".format(helpers.to_apparent_repo_name(priv["rctx_name"]), str(label_store.label("pnpm_lock")))
+
+    contents = []
     for key, value in priv["input_hashes"].items():
         contents.append("{}={}".format(key, value))
+
+    # Sort to reduce diffs when the file is updated
+    contents = sorted(contents)
+
     rctx.file(
         label_store.repository_path("action_cache"),
-        "\n".join(contents) + "\n",
+        header + "\n".join(contents) + "\n",
     )
     utils.reverse_force_copy(
         rctx,
@@ -491,7 +464,7 @@ def _load_npmrc(priv, rctx, npmrc_path):
 
 ################################################################################
 def _load_home_npmrc(priv, rctx):
-    home_directory = utils.home_directory(rctx)
+    home_directory = repo_utils.get_home_directory(rctx)
     if not home_directory:
         # buildifier: disable=print
         print("""
@@ -507,25 +480,25 @@ WARNING: Cannot determine home directory in order to load home `.npmrc` file in 
         _load_npmrc(priv, rctx, home_npmrc_path)
 
 ################################################################################
-def _load_lockfile(priv, rctx, attr, label_store):
+def _load_lockfile(priv, rctx, _, label_store):
     importers = {}
     packages = {}
     patched_dependencies = {}
+    lock_version = None
     lock_parse_err = None
-    if attr.use_starlark_yaml_parser:
-        importers, packages, patched_dependencies, lock_parse_err = utils.parse_pnpm_lock_yaml(rctx.read(label_store.path("pnpm_lock")))
-    else:
-        yq_args = [
-            str(label_store.path("host_yq")),
-            str(label_store.path("pnpm_lock")),
-            "-o=json",
-        ]
-        result = rctx.execute(yq_args)
-        if result.return_code:
-            lock_parse_err = "failed to parse pnpm lock file with yq. '{}' exited with {}: \nSTDOUT:\n{}\nSTDERR:\n{}".format(" ".join(yq_args), result.return_code, result.stdout, result.stderr)
-        else:
-            importers, packages, patched_dependencies, lock_parse_err = utils.parse_pnpm_lock_json(result.stdout if result.stdout != "null" else None)  # NB: yq will return the string "null" if the yaml file is empty
 
+    yq_args = [
+        str(label_store.path("host_yq")),
+        str(label_store.path("pnpm_lock")),
+        "-o=json",
+    ]
+    result = rctx.execute(yq_args)
+    if result.return_code:
+        lock_parse_err = "failed to parse pnpm lock file with yq. '{}' exited with {}: \nSTDOUT:\n{}\nSTDERR:\n{}".format(" ".join(yq_args), result.return_code, result.stdout, result.stderr)
+    else:
+        importers, packages, patched_dependencies, lock_version, lock_parse_err = pnpm.parse_pnpm_lock_json(result.stdout if result.stdout != "null" else None)  # NB: yq will return the string "null" if the yaml file is empty
+
+    priv["lock_version"] = lock_version
     priv["importers"] = importers
     priv["packages"] = packages
     priv["patched_dependencies"] = patched_dependencies
@@ -558,6 +531,9 @@ def _default_registry(priv):
 def _link_workspace(priv):
     return priv["link_workspace"]
 
+def _lockfile_version(priv):
+    return priv["lock_version"]
+
 def _importers(priv):
     return priv["importers"]
 
@@ -566,6 +542,9 @@ def _packages(priv):
 
 def _patched_dependencies(priv):
     return priv["patched_dependencies"]
+
+def _only_built_dependencies(priv):
+    return _root_package_json(priv).get("pnpm", {}).get("onlyBuiltDependencies", None)
 
 def _num_patches(priv):
     return priv["num_patches"]
@@ -603,6 +582,7 @@ def _new(rctx_name, rctx, attr, bzlmod):
         "npm_registries": {},
         "packages": {},
         "root_package": None,
+        "root_package_json": {},
         "patched_dependencies": {},
         "should_update_pnpm_lock": should_update_pnpm_lock,
     }
@@ -614,9 +594,11 @@ def _new(rctx_name, rctx, attr, bzlmod):
         should_update_pnpm_lock = lambda: _should_update_pnpm_lock(priv),
         default_registry = lambda: _default_registry(priv),
         link_workspace = lambda: _link_workspace(priv),
+        lockfile_version = lambda: _lockfile_version(priv),
         importers = lambda: _importers(priv),
         packages = lambda: _packages(priv),
         patched_dependencies = lambda: _patched_dependencies(priv),
+        only_built_dependencies = lambda: _only_built_dependencies(priv),
         npm_registries = lambda: _npm_registries(priv),
         npm_auth = lambda: _npm_auth(priv),
         num_patches = lambda: _num_patches(priv),
@@ -624,7 +606,6 @@ def _new(rctx_name, rctx, attr, bzlmod):
         set_input_hash = lambda label, value: _set_input_hash(priv, label, value),
         action_cache_miss = lambda: _action_cache_miss(priv, rctx, label_store),
         write_action_cache = lambda: _write_action_cache(priv, rctx, label_store),
-        reload_lockfile = lambda: _reload_lockfile(priv, rctx, attr, label_store),
     )
 
 npm_translate_lock_state = struct(

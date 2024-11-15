@@ -23,16 +23,16 @@ js_library(
 | Python sources and provides a `PyInfo`.
 """
 
-load(":js_info.bzl", "JsInfo", "js_info")
-load(":js_helpers.bzl", "DOWNSTREAM_LINKED_NPM_DEPS_DOCSTRING", "JS_LIBRARY_DATA_ATTR", "copy_js_file_to_bin_action", "gather_npm_linked_packages", "gather_npm_package_store_deps", "gather_runfiles", "gather_transitive_declarations", "gather_transitive_sources")
 load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "COPY_FILE_TO_BIN_TOOLCHAINS")
+load(":js_helpers.bzl", "copy_js_file_to_bin_action", "gather_runfiles")
+load(":js_info.bzl", "JsInfo", "js_info")
 
 _DOC = """A library of JavaScript sources. Provides JsInfo, the primary provider used in rules_js
 and derivative rule sets.
 
 Declaration files are handled separately from sources since they are generally not needed at
 runtime and build rules, such as ts_project, are optimal in their build graph if they only depend
-on declarations from `deps` since these they don't need the JavaScript source files from deps to
+on types from `deps` since these they don't need the JavaScript source files from deps to
 typecheck.
 
 Linked npm dependences are also handled separately from sources since not all rules require them and it
@@ -41,6 +41,21 @@ is optimal for these rules to not depend on them in the build graph.
 NB: `js_library` copies all source files to the output tree before providing them in JsInfo. See
 https://github.com/aspect-build/rules_js/tree/dbb5af0d2a9a2bb50e4cf4a96dbc582b27567155/docs#javascript
 for more context on why we do this."""
+
+_LINKED_NPM_DEPS_DOCSTRING = """If this list contains linked npm packages, npm package store targets or other targets that provide
+`JsInfo`, `NpmPackageStoreInfo` providers are gathered from `JsInfo`. This is done directly from
+the `npm_package_store_infos` field of these. For linked npm package targets, the underlying
+`npm_package_store` target(s) that back the links are used. Gathered `NpmPackageStoreInfo`
+providers are propagated to the direct dependencies of downstream linked targets.
+
+NB: Linked npm package targets that are "dev" dependencies do not forward their underlying
+`npm_package_store` target(s) through `npm_package_store_infos` and will therefore not be
+propagated to the direct dependencies of downstream linked targets. npm packages
+that come in from `npm_translate_lock` are considered "dev" dependencies if they are have
+`dev: true` set in the pnpm lock file. This should be all packages that are only listed as
+"devDependencies" in all `package.json` files within the pnpm workspace. This behavior is
+intentional to mimic how `devDependencies` work in published npm packages.
+"""
 
 _ATTRS = {
     "srcs": attr.label_list(
@@ -53,22 +68,22 @@ runfiles of this target. They should appear in the '*.runfiles' area of any exec
 runtime dependency on this target.
 
 Source files that are JSON files, declaration files or directory artifacts will be automatically provided as
-"declarations" available to downstream rules for type checking. To explicitly provide source files as "declarations"
-available to downstream rules for type checking that do not match these criteria, move those files to the `declarations`
+"types" available to downstream rules for type checking. To explicitly provide source files as "types"
+available to downstream rules for type checking that do not match these criteria, move those files to the `types`
 attribute instead.
 """,
         allow_files = True,
     ),
-    "declarations": attr.label_list(
-        doc = """Same as `srcs` except all files are also provided as "declarations" available to downstream rules for type checking.
+    "types": attr.label_list(
+        doc = """Same as `srcs` except all files are also provided as "types" available to downstream rules for type checking.
 
 For example, a js_library with only `.js` files that are intended to be imported as `.js` files by downstream type checking
-rules such as `ts_project` would list those files in `declarations`:
+rules such as `ts_project` would list those files in `types`:
 
 ```
 js_library(
     name = "js_lib",
-    declarations = ["index.js"],
+    types = ["index.js"],
 )
 ```
 """,
@@ -83,11 +98,23 @@ The transitive npm dependencies, transitive sources & runfiles of targets in the
 runfiles of this target. They should appear in the '*.runfiles' area of any executable which is output by or has a
 runtime dependency on this target.
 
-{downstream_linked_npm_deps}
-""".format(downstream_linked_npm_deps = DOWNSTREAM_LINKED_NPM_DEPS_DOCSTRING),
+{linked_npm_deps}
+""".format(linked_npm_deps = _LINKED_NPM_DEPS_DOCSTRING),
         providers = [JsInfo],
     ),
-    "data": JS_LIBRARY_DATA_ATTR,
+    "data": attr.label_list(
+        doc = """Runtime dependencies to include in binaries/tests that depend on this target.
+
+The transitive npm dependencies, transitive sources, default outputs and runfiles of targets in the `data` attribute
+are added to the runfiles of this target. They should appear in the '*.runfiles' area of any executable which has
+a runtime dependency on this target.
+
+{linked_npm_deps}
+""".format(
+            linked_npm_deps = _LINKED_NPM_DEPS_DOCSTRING,
+        ),
+        allow_files = True,
+    ),
     "no_copy_to_bin": attr.label_list(
         allow_files = True,
         doc = """List of files to not copy to the Bazel output tree when `copy_data_to_bin` is True.
@@ -103,33 +130,33 @@ runtime dependency on this target.
     ),
 }
 
-def _gather_sources_and_declarations(ctx, targets, files):
-    """Gathers sources and declarations from a list of targets
+def _gather_sources_and_types(ctx, targets, files):
+    """Gathers sources and types from a list of targets
 
     Args:
         ctx: the rule context
 
-        targets: List of targets to gather sources and declarations from their JsInfo providers.
+        targets: List of targets to gather sources and types from their JsInfo providers.
 
             These typically come from the `srcs` and/or `data` attributes of a rule
 
-        files: List of files to gather as sources and declarations.
+        files: List of files to gather as sources and types.
 
             These typically come from the `srcs` and/or `data` attributes of a rule
 
     Returns:
-        Sources & declaration files depsets in the sequence (sources, declarations)
+        Sources & declaration files depsets in the sequence (sources, types)
     """
     sources = []
-    declarations = []
+    types = []
 
     for file in files:
         if file.is_source:
             file = copy_js_file_to_bin_action(ctx, file)
 
         if file.is_directory:
-            # assume a directory contains declarations since we can't know that it doesn't
-            declarations.append(file)
+            # assume a directory contains types since we can't know that it doesn't
+            types.append(file)
             sources.append(file)
         elif (
             file.path.endswith(".d.ts") or
@@ -139,11 +166,11 @@ def _gather_sources_and_declarations(ctx, targets, files):
             file.path.endswith(".d.cts") or
             file.path.endswith(".d.cts.map")
         ):
-            declarations.append(file)
+            types.append(file)
         elif file.path.endswith(".json"):
             # Any .json can produce types: https://www.typescriptlang.org/tsconfig/#resolveJsonModule
-            # package.json may be required to resolve declarations with the "typings" key
-            declarations.append(file)
+            # package.json may be required to resolve types with the "typings" key
+            types.append(file)
             sources.append(file)
         else:
             sources.append(file)
@@ -152,84 +179,96 @@ def _gather_sources_and_declarations(ctx, targets, files):
     sources = depset(sources, transitive = [
         target[JsInfo].sources
         for target in targets
-        if JsInfo in target and hasattr(target[JsInfo], "sources")
+        if JsInfo in target
     ])
 
-    # declarations as depset
-    declarations = depset(declarations, transitive = [
-        target[JsInfo].declarations
+    # types as depset
+    types = depset(types, transitive = [
+        target[JsInfo].types
         for target in targets
-        if JsInfo in target and hasattr(target[JsInfo], "declarations")
+        if JsInfo in target
     ])
 
-    return (sources, declarations)
+    return (sources, types)
 
 def _js_library_impl(ctx):
-    sources, declarations = _gather_sources_and_declarations(
+    sources, types = _gather_sources_and_types(
         ctx = ctx,
         targets = ctx.attr.srcs,
         files = ctx.files.srcs,
     )
 
-    additional_sources, additional_declarations = _gather_sources_and_declarations(
+    additional_sources, additional_types = _gather_sources_and_types(
         ctx = ctx,
-        targets = ctx.attr.declarations,
-        files = ctx.files.declarations,
+        targets = ctx.attr.types,
+        files = ctx.files.types,
     )
 
+    # Direct sources and types
     sources = depset(transitive = [sources, additional_sources])
-    declarations = depset(transitive = [declarations, additional_sources, additional_declarations])
+    types = depset(transitive = [types, additional_sources, additional_types])
 
-    transitive_sources = gather_transitive_sources(
-        sources = sources,
-        targets = ctx.attr.srcs + ctx.attr.declarations + ctx.attr.deps,
-    )
+    # Transitive sources and types
+    transitive_sources = [sources]
+    transitive_types = [types]
 
-    transitive_declarations = gather_transitive_declarations(
-        declarations = declarations,
-        targets = ctx.attr.srcs + ctx.attr.declarations + ctx.attr.deps,
-    )
+    # npm providers
+    npm_sources = []
+    npm_package_store_infos = []
 
-    npm_linked_packages = gather_npm_linked_packages(
-        srcs = ctx.attr.srcs + ctx.attr.declarations,
-        deps = ctx.attr.deps,
-    )
+    # Concat the srcs+types+deps once
+    srcs_types_deps = ctx.attr.srcs + ctx.attr.types + ctx.attr.deps
 
-    npm_package_store_deps = gather_npm_package_store_deps(
-        targets = ctx.attr.srcs + ctx.attr.data + ctx.attr.deps,
-    )
+    # Collect transitive sources, types and npm providers from srcs+types+deps
+    for target in srcs_types_deps:
+        if JsInfo in target:
+            jsinfo = target[JsInfo]
+            transitive_sources.append(jsinfo.transitive_sources)
+            transitive_types.append(jsinfo.transitive_types)
+            npm_sources.append(jsinfo.npm_sources)
+            npm_package_store_infos.append(jsinfo.npm_package_store_infos)
+
+    # Also add npm_package_store_infos from ctx.attr.data
+    for target in ctx.attr.data:
+        if JsInfo in target:
+            npm_package_store_infos.append(target[JsInfo].npm_package_store_infos)
+
+    transitive_sources = depset(transitive = transitive_sources)
+    transitive_types = depset(transitive = transitive_types)
+    npm_sources = depset(transitive = npm_sources)
+    npm_package_store_infos = depset(transitive = npm_package_store_infos)
 
     runfiles = gather_runfiles(
         ctx = ctx,
         sources = transitive_sources,
         data = ctx.attr.data,
-        deps = ctx.attr.srcs + ctx.attr.declarations + ctx.attr.deps,
+        deps = srcs_types_deps,
         data_files = ctx.files.data,
         copy_data_files_to_bin = ctx.attr.copy_data_to_bin,
         no_copy_to_bin = ctx.files.no_copy_to_bin,
+        include_sources = True,
+        include_types = False,
         include_transitive_sources = True,
-        include_declarations = False,
-        include_npm_linked_packages = True,
+        include_transitive_types = False,
+        include_npm_sources = True,
     )
 
     return [
         js_info(
-            declarations = declarations,
-            npm_linked_package_files = npm_linked_packages.direct_files,
-            npm_linked_packages = npm_linked_packages.direct,
-            npm_package_store_deps = npm_package_store_deps,
+            target = ctx.label,
             sources = sources,
-            transitive_declarations = transitive_declarations,
-            transitive_npm_linked_package_files = npm_linked_packages.transitive_files,
-            transitive_npm_linked_packages = npm_linked_packages.transitive,
+            types = types,
             transitive_sources = transitive_sources,
+            transitive_types = transitive_types,
+            npm_sources = npm_sources,
+            npm_package_store_infos = npm_package_store_infos,
         ),
         DefaultInfo(
             files = sources,
             runfiles = runfiles,
         ),
         OutputGroupInfo(
-            types = declarations,
+            types = types,
             runfiles = runfiles.files,
         ),
     ]

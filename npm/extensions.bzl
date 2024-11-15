@@ -2,27 +2,30 @@
 See https://bazel.build/docs/bzlmod#extension-definition
 """
 
+load("@aspect_bazel_lib//lib:repo_utils.bzl", "repo_utils")
+load("@aspect_bazel_lib//lib:utils.bzl", bazel_lib_utils = "utils")
 load("@bazel_features//:features.bzl", "bazel_features")
-load("//npm:repositories.bzl", "npm_import", "pnpm_repository", _LATEST_PNPM_VERSION = "LATEST_PNPM_VERSION")
+load("//npm:repositories.bzl", "npm_import", "pnpm_repository", _DEFAULT_PNPM_VERSION = "DEFAULT_PNPM_VERSION", _LATEST_PNPM_VERSION = "LATEST_PNPM_VERSION")
 load("//npm/private:npm_import.bzl", "npm_import_lib", "npm_import_links_lib")
-load("//npm/private:npm_translate_lock.bzl", "npm_translate_lock", "npm_translate_lock_lib")
+load("//npm/private:npm_translate_lock.bzl", "npm_translate_lock_lib", "npm_translate_lock_rule")
 load("//npm/private:npm_translate_lock_helpers.bzl", npm_translate_lock_helpers = "helpers")
 load("//npm/private:npm_translate_lock_macro_helpers.bzl", macro_helpers = "helpers")
 load("//npm/private:npm_translate_lock_state.bzl", "npm_translate_lock_state")
 load("//npm/private:npmrc.bzl", "parse_npmrc")
+load("//npm/private:pnpm_extension.bzl", "DEFAULT_PNPM_REPO_NAME", "resolve_pnpm_repositories")
+load("//npm/private:tar.bzl", "detect_system_tar")
 load("//npm/private:transitive_closure.bzl", "translate_to_transitive_closure")
-load("//npm/private:utils.bzl", "utils")
 
+DEFAULT_PNPM_VERSION = _DEFAULT_PNPM_VERSION
 LATEST_PNPM_VERSION = _LATEST_PNPM_VERSION
-_DEFAULT_PNPM_REPO_NAME = "pnpm"
 
 def _npm_extension_impl(module_ctx):
+    if not bazel_lib_utils.is_bazel_6_or_greater():
+        # ctx.actions.declare_symlink was added in Bazel 6
+        fail("A minimum version of Bazel 6 required to use rules_js")
+
     for mod in module_ctx.modules:
         for attr in mod.tags.npm_translate_lock:
-            # TODO(2.0): remove pnpm_version from bzlmod API
-            if attr.pnpm_version:
-                fail("npm_translate_lock paramater 'pnpm_version' is not supported with bzlmod, use `use_pnpm` instead, received value: '{}'")
-
             _npm_translate_lock_bzlmod(attr)
 
             # We cannot read the pnpm_lock file before it has been bootstrapped.
@@ -40,7 +43,7 @@ def _npm_extension_impl(module_ctx):
     return module_ctx.extension_metadata()
 
 def _npm_translate_lock_bzlmod(attr):
-    npm_translate_lock(
+    npm_translate_lock_rule(
         name = attr.name,
         bins = attr.bins,
         custom_postinstalls = attr.custom_postinstalls,
@@ -48,12 +51,6 @@ def _npm_translate_lock_bzlmod(attr):
         dev = attr.dev,
         external_repository_action_cache = attr.external_repository_action_cache,
         generate_bzl_library_targets = attr.generate_bzl_library_targets,
-        lifecycle_hooks = attr.lifecycle_hooks,
-        lifecycle_hooks_envs = attr.lifecycle_hooks_envs,
-        lifecycle_hooks_execution_requirements = attr.lifecycle_hooks_execution_requirements,
-        lifecycle_hooks_exclude = attr.lifecycle_hooks_exclude,
-        lifecycle_hooks_no_sandbox = attr.lifecycle_hooks_no_sandbox,
-        lifecycle_hooks_use_default_shell_env = attr.lifecycle_hooks_use_default_shell_env,
         link_workspace = attr.link_workspace,
         no_optional = attr.no_optional,
         npmrc = attr.npmrc,
@@ -68,20 +65,14 @@ def _npm_translate_lock_bzlmod(attr):
         prod = attr.prod,
         public_hoist_packages = attr.public_hoist_packages,
         quiet = attr.quiet,
-        register_copy_directory_toolchains = False,  # this registration is handled elsewhere with bzlmod
-        register_copy_to_directory_toolchains = False,  # this registration is handled elsewhere with bzlmod
-        register_yq_toolchains = False,  # this registration is handled elsewhere with bzlmod
-        register_tar_toolchains = False,  # this registration is handled elsewhere with bzlmod
         replace_packages = attr.replace_packages,
         root_package = attr.root_package,
-        run_lifecycle_hooks = attr.run_lifecycle_hooks,
         update_pnpm_lock = attr.update_pnpm_lock,
         use_home_npmrc = attr.use_home_npmrc,
         verify_node_modules_ignored = attr.verify_node_modules_ignored,
         verify_patches = attr.verify_patches,
         yarn_lock = attr.yarn_lock,
         bzlmod = True,
-        pnpm_version = None,
     )
 
 def _npm_lock_imports_bzlmod(module_ctx, attr):
@@ -102,7 +93,7 @@ def _npm_lock_imports_bzlmod(module_ctx, attr):
         (registries, npm_auth) = npm_translate_lock_helpers.get_npm_auth(npmrc, module_ctx.path(attr.npmrc), module_ctx.os.environ)
 
     if attr.use_home_npmrc:
-        home_directory = utils.home_directory(module_ctx)
+        home_directory = repo_utils.get_home_directory(module_ctx)
         if home_directory:
             home_npmrc_path = "{}/{}".format(home_directory, ".npmrc")
             home_npmrc = parse_npmrc(module_ctx.read(home_npmrc_path))
@@ -128,6 +119,7 @@ WARNING: Cannot determine home directory in order to load home `.npmrc` file in 
         importers = importers,
         packages = packages,
         patched_dependencies = state.patched_dependencies(),
+        only_built_dependencies = state.only_built_dependencies(),
         root_package = attr.pnpm_lock.package,
         rctx_name = attr.name,
         attr = attr,
@@ -138,6 +130,8 @@ WARNING: Cannot determine home directory in order to load home `.npmrc` file in 
         default_registry = state.default_registry(),
         npm_auth = npm_auth,
     )
+
+    system_tar = detect_system_tar(module_ctx)
 
     for i in imports:
         npm_import(
@@ -154,7 +148,8 @@ WARNING: Cannot determine home directory in order to load home `.npmrc` file in 
             lifecycle_hooks_execution_requirements = i.lifecycle_hooks_execution_requirements,
             lifecycle_hooks_use_default_shell_env = i.lifecycle_hooks_use_default_shell_env,
             link_packages = i.link_packages,
-            link_workspace = attr.link_workspace if attr.link_workspace else attr.pnpm_lock.workspace_name,
+            # attr.pnpm_lock.workspace_name is a canonical repository name, so it needs to be qualified with an extra '@'.
+            link_workspace = attr.link_workspace if attr.link_workspace else "@" + attr.pnpm_lock.workspace_name,
             npm_auth = i.npm_auth,
             npm_auth_basic = i.npm_auth_basic,
             npm_auth_password = i.npm_auth_password,
@@ -166,10 +161,9 @@ WARNING: Cannot determine home directory in order to load home `.npmrc` file in 
             replace_package = i.replace_package,
             root_package = i.root_package,
             transitive_closure = i.transitive_closure,
+            system_tar = system_tar,
             url = i.url,
             version = i.version,
-            register_copy_directory_toolchains = False,  # this registration is handled elsewhere with bzlmod
-            register_copy_to_directory_toolchains = False,  # this registration is handled elsewhere with bzlmod
         )
 
 def _npm_import_bzlmod(i):
@@ -185,7 +179,6 @@ def _npm_import_bzlmod(i):
         lifecycle_hooks = i.lifecycle_hooks,
         lifecycle_hooks_env = i.lifecycle_hooks_env,
         lifecycle_hooks_execution_requirements = i.lifecycle_hooks_execution_requirements,
-        lifecycle_hooks_no_sandbox = i.lifecycle_hooks_no_sandbox,
         lifecycle_hooks_use_default_shell_env = i.lifecycle_hooks_use_default_shell_env,
         link_packages = i.link_packages,
         link_workspace = i.link_workspace,
@@ -199,12 +192,9 @@ def _npm_import_bzlmod(i):
         patches = i.patches,
         replace_package = i.replace_package,
         root_package = i.root_package,
-        run_lifecycle_hooks = i.run_lifecycle_hooks,
         transitive_closure = i.transitive_closure,
         url = i.url,
         version = i.version,
-        register_copy_directory_toolchains = False,  # this registration is handled elsewhere with bzlmod
-        register_copy_to_directory_toolchains = False,  # this registration is handled elsewhere with bzlmod
     )
 
 def _npm_translate_lock_attrs():
@@ -214,16 +204,14 @@ def _npm_translate_lock_attrs():
     attrs["name"] = attr.string()
     attrs["lifecycle_hooks_exclude"] = attr.string_list(default = [])
     attrs["lifecycle_hooks_no_sandbox"] = attr.bool(default = True)
-
-    # Note, pnpm_version can't be a tuple here, so we can't accept the integrity hash.
-    # This is okay since you can just call the pnpm module extension below first.
-    # TODO(2.0): drop pnpm_version from this module extension
-    attrs["pnpm_version"] = attr.string(mandatory = False)
     attrs["run_lifecycle_hooks"] = attr.bool(default = True)
 
     # Args defaulted differently by the macro
-    attrs["npm_package_target_name"] = attr.string(default = "{dirname}")
+    attrs["npm_package_target_name"] = attr.string(default = "pkg")
     attrs["patch_args"] = attr.string_list_dict(default = {"*": ["-p0"]})
+
+    # Args not supported or unnecessary in bzlmod
+    attrs.pop("repositories_bzl_filename")
 
     return attrs
 
@@ -251,45 +239,17 @@ npm = module_extension(
     },
 )
 
-# copied from https://github.com/bazelbuild/bazel-skylib/blob/b459822483e05da514b539578f81eeb8a705d600/lib/versions.bzl#L60
-# to avoid taking a dependency on skylib here
-def _parse_version(version):
-    return tuple([int(n) for n in version.split(".")])
-
 def _pnpm_extension_impl(module_ctx):
-    registrations = {}
-    integrity = {}
-    for mod in module_ctx.modules:
-        for attr in mod.tags.pnpm:
-            if attr.name != _DEFAULT_PNPM_REPO_NAME and not mod.is_root:
-                fail("""\
-                Only the root module may override the default name for the pnpm repository.
-                This prevents conflicting registrations in the global namespace of external repos.
-                """)
-            if attr.name not in registrations.keys():
-                registrations[attr.name] = []
-            registrations[attr.name].append(attr.pnpm_version)
-            if attr.pnpm_version_integrity:
-                integrity[attr.pnpm_version] = attr.pnpm_version_integrity
-    for name, versions in registrations.items():
-        # Use "Minimal Version Selection" like bzlmod does for resolving module conflicts
-        # Note, the 'sorted(list)' function in starlark doesn't allow us to provide a custom comparator
-        if len(versions) > 1:
-            selected = versions[0]
-            selected_tuple = _parse_version(selected)
-            for idx in range(1, len(versions)):
-                if _parse_version(versions[idx]) > selected_tuple:
-                    selected = versions[idx]
-                    selected_tuple = _parse_version(selected)
+    resolved = resolve_pnpm_repositories(module_ctx.modules)
 
-            # buildifier: disable=print
-            print("NOTE: repo '{}' has multiple versions {}; selected {}".format(name, versions, selected))
-        else:
-            selected = versions[0]
+    for note in resolved.notes:
+        # buildifier: disable=print
+        print(note)
 
+    for name, pnpm_version in resolved.repositories.items():
         pnpm_repository(
             name = name,
-            pnpm_version = (selected, integrity[selected]) if selected in integrity.keys() else selected,
+            pnpm_version = pnpm_version,
         )
 
 pnpm = module_extension(
@@ -300,9 +260,12 @@ pnpm = module_extension(
                 "name": attr.string(
                     doc = """Name of the generated repository, allowing more than one pnpm version to be registered.
                         Overriding the default is only permitted in the root module.""",
-                    default = _DEFAULT_PNPM_REPO_NAME,
+                    default = DEFAULT_PNPM_REPO_NAME,
                 ),
-                "pnpm_version": attr.string(default = LATEST_PNPM_VERSION),
+                "pnpm_version": attr.string(
+                    doc = "pnpm version to use. The string `latest` will be resolved to LATEST_PNPM_VERSION.",
+                    default = DEFAULT_PNPM_VERSION,
+                ),
                 "pnpm_version_integrity": attr.string(),
             },
         ),

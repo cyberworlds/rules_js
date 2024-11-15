@@ -3,16 +3,30 @@ local_repository(
     path = "../..",
 )
 
+# The same primary lockfile across all versions
+PNPM_LOCK_VERSIONS = [
+    "v54",
+    "v60",
+    "v61",
+    "v90",
+]
+
+# Lockfiles with unique test cases
+PNPM_LOCK_TEST_CASES = [
+    "tarball-no-url-v54.yaml",
+    "override-with-alias-url-v9.yaml",
+    "isaacs-cliui-v90.yaml",
+    "docusaurus-direct-peer-v6.yaml",
+    "docusaurus-direct-peer-v9.yaml",
+]
+
 load("@aspect_rules_js//js:repositories.bzl", "rules_js_dependencies")
 
 rules_js_dependencies()
 
-load("@rules_nodejs//nodejs:repositories.bzl", "DEFAULT_NODE_VERSION", "nodejs_register_toolchains")
+load("@aspect_rules_js//js:toolchains.bzl", "DEFAULT_NODE_VERSION", "rules_js_register_toolchains")
 
-nodejs_register_toolchains(
-    name = "nodejs",
-    node_version = DEFAULT_NODE_VERSION,
-)
+rules_js_register_toolchains(node_version = DEFAULT_NODE_VERSION)
 
 load("@aspect_rules_js//npm:repositories.bzl", "npm_translate_lock")
 
@@ -20,32 +34,49 @@ load("@aspect_rules_js//npm:repositories.bzl", "npm_translate_lock")
     npm_translate_lock(
         name = "lock-%s" % version,
         data = [
-            "//:package.json",
+            "//%s:package.json" % version,
             "//%s:patches/meaning-of-life@1.0.0-pnpm.patch" % version,
-            "//:pnpm-workspace.yaml",
         ],
-        npmrc = "//:.npmrc",
-        patch_args = {"*": ["-p1"]},
         pnpm_lock = "//%s:pnpm-lock.yaml" % version,
         verify_node_modules_ignored = "//:.bazelignore",
     )
-    for version in [
-        "v53",
-        "v54",
-        "v60",
-        "v61",
-    ]
+    for version in PNPM_LOCK_VERSIONS
 ]
 
-load("@lock-v53//:repositories.bzl", npm_repositories_v53 = "npm_repositories")
 load("@lock-v54//:repositories.bzl", npm_repositories_v54 = "npm_repositories")
 load("@lock-v60//:repositories.bzl", npm_repositories_v60 = "npm_repositories")
 load("@lock-v61//:repositories.bzl", npm_repositories_v61 = "npm_repositories")
-
-npm_repositories_v53()
+load("@lock-v90//:repositories.bzl", npm_repositories_v90 = "npm_repositories")
 
 npm_repositories_v54()
 
 npm_repositories_v60()
 
 npm_repositories_v61()
+
+npm_repositories_v90()
+
+[
+    npm_translate_lock(
+        name = lockfile.replace(".yaml", ""),
+        pnpm_lock = "//cases:%s" % lockfile,
+        verify_node_modules_ignored = "//:.bazelignore",
+    )
+    for lockfile in PNPM_LOCK_TEST_CASES
+]
+
+load("@docusaurus-direct-peer-v6//:repositories.bzl", npm_repositories_direct_with_peers_v6 = "npm_repositories")
+load("@docusaurus-direct-peer-v9//:repositories.bzl", npm_repositories_direct_with_peers_v9 = "npm_repositories")
+load("@isaacs-cliui-v90//:repositories.bzl", npm_repositories_isaacs_cliui_v90 = "npm_repositories")
+load("@override-with-alias-url-v9//:repositories.bzl", npm_repositories_override_with_alias_v90 = "npm_repositories")
+load("@tarball-no-url-v54//:repositories.bzl", npm_repositories_tarball_no_url_v54 = "npm_repositories")
+
+npm_repositories_tarball_no_url_v54()
+
+npm_repositories_override_with_alias_v90()
+
+npm_repositories_isaacs_cliui_v90()
+
+npm_repositories_direct_with_peers_v6()
+
+npm_repositories_direct_with_peers_v9()

@@ -10,12 +10,12 @@ load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 ```
 """
 
-load("@aspect_bazel_lib//lib:run_binary.bzl", _run_binary = "run_binary")
-load("@aspect_bazel_lib//lib:utils.bzl", "to_label")
 load("@aspect_bazel_lib//lib:copy_to_bin.bzl", _copy_to_bin = "copy_to_bin")
+load("@aspect_bazel_lib//lib:run_binary.bzl", _run_binary = "run_binary")
+load("@aspect_bazel_lib//lib:utils.bzl", bazel_lib_utils = "utils")
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load(":js_helpers.bzl", _envs_for_log_level = "envs_for_log_level")
-load(":js_filegroup.bzl", _js_filegroup = "js_filegroup")
+load(":js_info_files.bzl", _js_info_files = "js_info_files")
 load(":js_library.bzl", _js_library = "js_library")
 
 def js_run_binary(
@@ -33,9 +33,11 @@ def js_run_binary(
         silent_on_success = True,
         use_execroot_entry_point = True,
         copy_srcs_to_bin = True,
+        include_sources = True,
+        include_types = False,
         include_transitive_sources = True,
-        include_declarations = False,
-        include_npm_linked_packages = True,
+        include_transitive_types = False,
+        include_npm_sources = True,
         log_level = None,
         mnemonic = "JsRunBinary",
         progress_message = None,
@@ -150,11 +152,15 @@ def js_run_binary(
 
         copy_srcs_to_bin: When True, all srcs files are copied to the output tree that are not already there.
 
-        include_transitive_sources: see `js_filegroup` documentation
+        include_sources: see `js_info_files` documentation
 
-        include_declarations: see `js_filegroup` documentation
+        include_types: see `js_info_files` documentation
 
-        include_npm_linked_packages: see `js_filegroup` documentation
+        include_transitive_sources: see `js_info_files` documentation
+
+        include_transitive_types: see `js_info_files` documentation
+
+        include_npm_sources: see `js_info_files` documentation
 
         log_level: Set the logging level of the `js_binary` tool.
 
@@ -242,26 +248,47 @@ def js_run_binary(
     if "deps" in kwargs.keys():
         fail("Use srcs instead of deps in js_run_binary: https://docs.aspect.build/rules/aspect_rules_js/docs/js_run_binary#srcs")
 
+    # For backward compat
+    # TODO(3.0): remove backward compat handling
+    include_npm_linked_packages = kwargs.pop("include_npm_linked_packages", None)
+    if include_npm_linked_packages != None:
+        # buildifier: disable=print
+        print("""
+WARNING: js_run_binary 'include_npm_linked_packages' is deprecated. Use 'include_npm_sources' instead.""")
+        include_npm_sources = include_npm_linked_packages
+
+    # For backward compat
+    # TODO(3.0): remove backward compat handling
+    include_declarations = kwargs.pop("include_declarations", False)
+    if include_declarations:
+        # buildifier: disable=print
+        print("""
+WARNING: js_library 'include_declarations' is deprecated. Use 'include_types' instead.""")
+        include_types = include_declarations
+        include_transitive_types = include_declarations
+
     extra_srcs = []
 
     # Hoist js provider files to DefaultInfo
-    make_js_filegroup_target = (include_transitive_sources or
-                                include_declarations or
-                                include_npm_linked_packages)
-    if make_js_filegroup_target:
-        js_filegroup_name = "{}_js_filegroup".format(name)
-        _js_filegroup(
-            name = js_filegroup_name,
+    make_js_info_files_target = (include_transitive_sources or
+                                 include_types or
+                                 include_npm_sources)
+    if make_js_info_files_target:
+        js_info_files_name = "{}_js_info_files".format(name)
+        _js_info_files(
+            name = js_info_files_name,
             srcs = srcs,
+            include_sources = include_sources,
+            include_types = include_types,
             include_transitive_sources = include_transitive_sources,
-            include_declarations = include_declarations,
-            include_npm_linked_packages = include_npm_linked_packages,
+            include_transitive_types = include_transitive_types,
+            include_npm_sources = include_npm_sources,
             # Always tag the target manual since we should only build it when the final target is built.
             tags = kwargs.get("tags", []) + ["manual"],
             # Always propagate the testonly attribute
             testonly = kwargs.get("testonly", False),
         )
-        extra_srcs.append(":{}".format(js_filegroup_name))
+        extra_srcs.append(":{}".format(js_info_files_name))
 
     # Copy srcs to bin
     if copy_srcs_to_bin:
@@ -332,7 +359,7 @@ WARNING: {name} is not configured to produce outputs.
 If this is a generated bin from package_json.bzl, consider using the *_binary or *_test variant instead.
 See https://github.com/aspect-build/rules_js/tree/main/docs#using-binaries-published-to-npm
 """.format(
-            name = to_label(name),
+            name = bazel_lib_utils.to_label(name),
         ))
 
     # Configure run from execroot

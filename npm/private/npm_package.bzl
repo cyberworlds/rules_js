@@ -16,7 +16,6 @@ load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//lib:versions.bzl", "versions")
 load("//js:defs.bzl", "js_binary")
 load("//js:libs.bzl", "js_lib_helpers")
-load("//js:providers.bzl", "JsInfo")
 load(":npm_package_info.bzl", "NpmPackageInfo")
 
 # Pull in all copy_to_directory attributes except for exclude_prefixes
@@ -34,53 +33,33 @@ _NPM_PACKAGE_ATTRS = dicts.add(copy_to_directory_lib_attrs, {
 })
 
 _NPM_PACKAGE_FILES_ATTRS = {
-    "include_declarations": attr.bool(),
+    "include_types": attr.bool(),
     "include_runfiles": attr.bool(),
     "include_sources": attr.bool(),
-    "include_transitive_declarations": attr.bool(),
+    "include_transitive_types": attr.bool(),
     "include_transitive_sources": attr.bool(),
+    "include_npm_sources": attr.bool(),
     "srcs": attr.label_list(allow_files = True),
 }
 
 def _npm_package_files_impl(ctx):
     files_depsets = []
 
-    if ctx.attr.include_transitive_sources:
-        # include all transitive sources (this includes direct sources)
-        files_depsets.extend([
-            target[JsInfo].transitive_sources
-            for target in ctx.attr.srcs
-            if JsInfo in target and hasattr(target[JsInfo], "transitive_sources")
-        ])
-    elif ctx.attr.include_sources:
-        # include only direct sources
-        files_depsets.extend([
-            target[JsInfo].sources
-            for target in ctx.attr.srcs
-            if JsInfo in target and hasattr(target[JsInfo], "sources")
-        ])
-
-    if ctx.attr.include_transitive_declarations:
-        # include all transitive declarations (this includes direct declarations)
-        files_depsets.extend([
-            target[JsInfo].transitive_declarations
-            for target in ctx.attr.srcs
-            if JsInfo in target and hasattr(target[JsInfo], "transitive_declarations")
-        ])
-    elif ctx.attr.include_declarations:
-        # include only direct declarations
-        files_depsets.extend([
-            target[JsInfo].declarations
-            for target in ctx.attr.srcs
-            if JsInfo in target and hasattr(target[JsInfo], "declarations")
-        ])
+    files_depsets.append(js_lib_helpers.gather_files_from_js_infos(
+        ctx.attr.srcs,
+        include_sources = ctx.attr.include_sources,
+        include_types = ctx.attr.include_types,
+        include_transitive_sources = ctx.attr.include_transitive_sources,
+        include_transitive_types = ctx.attr.include_transitive_types,
+        include_npm_sources = ctx.attr.include_npm_sources,
+    ))
 
     if ctx.attr.include_runfiles:
         # include default runfiles from srcs
-        files_depsets.extend([
-            target[DefaultInfo].default_runfiles.files
-            for target in ctx.attr.srcs
-        ])
+        for target in ctx.attr.srcs:
+            files_depsets.append(
+                target[DefaultInfo].default_runfiles.files,
+            )
 
     return DefaultInfo(
         files = depset(transitive = files_depsets),
@@ -89,15 +68,10 @@ def _npm_package_files_impl(ctx):
 def _npm_package_impl(ctx):
     dst = ctx.actions.declare_directory(ctx.attr.out if ctx.attr.out else ctx.attr.name)
 
-    # forward all npm_package_store_deps
-    npm_package_store_deps = [
-        target[JsInfo].npm_package_store_deps
-        for target in ctx.attr.srcs
-        if JsInfo in target and hasattr(target[JsInfo], "npm_package_store_deps")
-    ]
-    npm_package_store_deps.append(js_lib_helpers.gather_npm_package_store_deps(
-        targets = ctx.attr.data,
-    ))
+    # forward all npm_package_store_infos
+    npm_package_store_infos = js_lib_helpers.gather_npm_package_store_infos(
+        targets = ctx.attr.srcs + ctx.attr.data,
+    )
 
     copy_to_directory_bin_action(
         ctx,
@@ -128,8 +102,8 @@ def _npm_package_impl(ctx):
         NpmPackageInfo(
             package = ctx.attr.package,
             version = ctx.attr.version,
-            directory = dst,
-            npm_package_store_deps = depset([], transitive = npm_package_store_deps),
+            src = dst,
+            npm_package_store_infos = npm_package_store_infos,
         ),
     ]
 
@@ -168,20 +142,20 @@ def npm_package(
         replace_prefixes = {},
         allow_overwrites = False,
         include_sources = True,
+        include_types = True,
         include_transitive_sources = True,
-        include_declarations = True,
-        include_transitive_declarations = True,
-        # TODO(2.0): flip include_runfiles default to False
-        include_runfiles = True,
+        include_transitive_types = True,
+        include_npm_sources = False,
+        include_runfiles = False,
         hardlink = "auto",
-        publishable = True,
+        publishable = False,
         verbose = False,
         **kwargs):
     """A macro that packages sources into a directory (a tree artifact) and provides an `NpmPackageInfo`.
 
     This target can be used as the `src` attribute to `npm_link_package`.
 
-    The macro also produces a target `[name].publish`, that can be run to publish to an npm registry.
+    With `publishable = True` the macro also produces a target `[name].publish`, that can be run to publish to an npm registry.
     Under the hood, this target runs `npm publish`. You can pass arguments to npm by escaping them from Bazel using a double-hyphen,
     for example: `bazel run //path/to:my_package.publish -- --tag=next`
 
@@ -215,18 +189,23 @@ def npm_package(
     `npm_package` makes use of `copy_to_directory`
     (https://docs.aspect.build/rules/aspect_bazel_lib/docs/copy_to_directory) under the hood,
     adopting its API and its copy action using composition. However, unlike `copy_to_directory`,
-    `npm_package` includes `transitive_sources` and `transitive_declarations` files from `JsInfo` providers in srcs
-    by default. The behavior of including sources and declarations from `JsInfo` can be configured
-    using the `include_sources`, `include_transitive_sources`, `include_declarations`, `include_transitive_declarations`
-    attributes.
+    `npm_package` includes direct and transitive sources and types files from `JsInfo` providers in srcs
+    by default. The behavior of including sources and types from `JsInfo` can be configured
+    using the `include_sources`, `include_transitive_sources`, `include_types`, `include_transitive_types`.
 
-    The two `include*_declarations` options may cause type-check actions to run, which slows down your
+    The two `include*_types` options may cause type-check actions to run, which slows down your
     development round-trip.
-    You can pass the Bazel option `--@aspect_rules_js//npm:exclude_declarations_from_npm_packages`
+    You can pass the Bazel option `--@aspect_rules_js//npm:exclude_types_from_npm_packages`
     to override these two attributes for an individual `bazel` invocation, avoiding the type-check.
 
-    `npm_package` also includes default runfiles from `srcs` by default which `copy_to_directory` does not. This behavior
-    can be configured with the `include_runfiles` attribute.
+    As of rules_js 2.0, the recommended solution for avoiding eager type-checking when linking
+    1p deps is to link `js_library` or any `JsInfo` producing targets directly without the
+    indirection of going through an `npm_package` target (see https://github.com/aspect-build/rules_js/pull/1646
+    for more details).
+
+    `npm_package` can also include npm packages sources and default runfiles from `srcs` which `copy_to_directory` does not.
+    These behaviors can be configured with the `include_npm_sourfes` and `include_runfiles` attributes
+    respectively.
 
     The default `include_srcs_packages`, `[".", "./**"]`, prevents files from outside of the target's
     package and subpackages from being included.
@@ -248,7 +227,7 @@ def npm_package(
 
             `NpmPackageStoreInfo` providers are gathered from `JsInfo` of the targets specified. Targets can be linked npm
             packages, npm package store targets or other targets that provide `JsInfo`. This is done directly from the
-            `npm_package_store_deps` field of these. For linked npm package targets, the underlying npm_package_store
+            `npm_package_store_infos` field of these. For linked npm package targets, the underlying npm_package_store
             target(s) that back the links is used.
 
             Gathered `NpmPackageStoreInfo` providers are used downstream as direct dependencies of this npm package when
@@ -405,19 +384,21 @@ def npm_package(
             since copies cannot be parallelized out as they are calculated. Instead all copy paths
             must be calculated before any copies can be started.
 
-        include_sources: When True, `sources` from `JsInfo` providers in data targets are included in the list of available files to copy.
+        include_sources: When True, `sources` from `JsInfo` providers in `srcs` targets are included in the list of available files to copy.
 
-        include_transitive_sources: When True, `transitive_sources` from `JsInfo` providers in data targets are included in the list of available files to copy.
+        include_types: When True, `types` from `JsInfo` providers in `srcs` targets are included in the list of available files to copy.
 
-        include_declarations: When True, `declarations` from `JsInfo` providers in data targets are included in the list of available files to copy.
+        include_transitive_sources: When True, `transitive_sources` from `JsInfo` providers in `srcs` targets are included in the list of available files to copy.
 
-        include_transitive_declarations: When True, `transitive_declarations` from `JsInfo` providers in data targets are included in the list of available files to copy.
+        include_transitive_types: When True, `transitive_types` from `JsInfo` providers in `srcs` targets are included in the list of available files to copy.
+
+        include_npm_sources: When True, `npm_sources` from `JsInfo` providers in `srcs` targets are included in the list of available files to copy.
 
         include_runfiles: When True, default runfiles from `srcs` targets are included in the list of available files to copy.
 
             This may be needed in a few cases:
 
-            - to work-around issues with rules that don't provide everything needed in sources, transitive_sources, declarations & transitive_declarations
+            - to work-around issues with rules that don't provide everything needed in sources, transitive_sources, types & transitive_types
             - to depend on the runfiles targets that don't use JsInfo
 
             NB: The default value will be flipped to False in the next major release as runfiles are not needed in the general case
@@ -444,21 +425,22 @@ def npm_package(
         **kwargs: Additional attributes such as `tags` and `visibility`
     """
 
-    if include_sources or include_transitive_sources or include_declarations or include_transitive_declarations or include_runfiles:
+    if include_sources or include_transitive_sources or include_types or include_transitive_types or include_runfiles:
         files_target = "{}_files".format(name)
         _npm_package_files(
             name = files_target,
             srcs = srcs,
             include_sources = include_sources,
+            include_types = select({
+                Label("@aspect_rules_js//npm:exclude_types_from_npm_packages_flag"): False,
+                "//conditions:default": include_types,
+            }),
             include_transitive_sources = include_transitive_sources,
-            include_declarations = select({
-                Label("@aspect_rules_js//npm:exclude_declarations_from_npm_packages_flag"): False,
-                "//conditions:default": include_declarations,
+            include_transitive_types = select({
+                Label("@aspect_rules_js//npm:exclude_types_from_npm_packages_flag"): False,
+                "//conditions:default": include_transitive_types,
             }),
-            include_transitive_declarations = select({
-                Label("@aspect_rules_js//npm:exclude_declarations_from_npm_packages_flag"): False,
-                "//conditions:default": include_transitive_declarations,
-            }),
+            include_npm_sources = include_npm_sources,
             include_runfiles = include_runfiles,
             # Always tag the target manual since we should only build it when the final target is built.
             tags = kwargs.get("tags", []) + ["manual"],
@@ -467,7 +449,6 @@ def npm_package(
         )
         srcs = srcs + [files_target]
 
-    # TODO(2.0): switch to false
     if publishable:
         js_binary(
             name = "{}.publish".format(name),
@@ -511,14 +492,6 @@ def stamped_package_json(name, stamp_var, **kwargs):
     This ensures that actions which use the package.json file can get cache hits.
 
     For more information on stamping, read https://docs.aspect.build/rules/aspect_bazel_lib/docs/stamping.
-
-    Using this rule requires that you register the jq toolchain in your WORKSPACE:
-
-    ```starlark
-    load("@aspect_bazel_lib//lib:repositories.bzl", "register_jq_toolchains")
-
-    register_jq_toolchains()
-    ```
 
     Args:
         name: name of the resulting `jq` target, must be "package"

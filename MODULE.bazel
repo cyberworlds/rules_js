@@ -3,26 +3,17 @@
 module(
     name = "aspect_rules_js",
     version = "0.0.0",
+    bazel_compatibility = [">=6.0.0"],
     compatibility_level = 1,
 )
 
 # Lower-bounds (minimum) versions for direct runtime dependencies.
 # Do not bump these unless rules_js requires a newer version to function.
-bazel_dep(name = "aspect_bazel_lib", version = "1.42.3")
+bazel_dep(name = "aspect_bazel_lib", version = "2.7.7")
 bazel_dep(name = "bazel_features", version = "1.9.0")
 bazel_dep(name = "bazel_skylib", version = "1.5.0")
-
-# Keep v5 in to avoid breaking changes.
-# TODO(2.0): change minimum to v6
-bazel_dep(name = "rules_nodejs", version = "5.8.2")
-
-# Override rules_nodejs to v6 to test the latest and recommended version internally.
-single_version_override(
-    module_name = "rules_nodejs",
-    version = "6.1.0",
-)
-
 bazel_dep(name = "platforms", version = "0.0.5")
+bazel_dep(name = "rules_nodejs", version = "6.3.0")
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 use_repo(node, "nodejs_darwin_amd64")
@@ -56,11 +47,11 @@ use_repo(bazel_lib_toolchains, "bsd_tar_toolchains")
 ####### Dev dependencies ########
 
 bazel_dep(name = "aspect_rules_lint", version = "0.12.0", dev_dependency = True)
-bazel_dep(name = "bazel_skylib_gazelle_plugin", version = "1.5.0", dev_dependency = True)
-bazel_dep(name = "buildifier_prebuilt", version = "6.4.0", dev_dependency = True)
-bazel_dep(name = "gazelle", version = "0.36.0", dev_dependency = True, repo_name = "bazel_gazelle")
-bazel_dep(name = "rules_go", version = "0.46.0", dev_dependency = True)
-bazel_dep(name = "stardoc", version = "0.6.2", dev_dependency = True, repo_name = "io_bazel_stardoc")
+bazel_dep(name = "bazel_skylib_gazelle_plugin", version = "1.7.1", dev_dependency = True)
+bazel_dep(name = "buildifier_prebuilt", version = "7.3.1", dev_dependency = True)
+bazel_dep(name = "gazelle", version = "0.39.1", dev_dependency = True, repo_name = "bazel_gazelle")
+bazel_dep(name = "rules_go", version = "0.50.1", dev_dependency = True)
+bazel_dep(name = "stardoc", version = "0.7.1", dev_dependency = True, repo_name = "io_bazel_stardoc")
 
 host = use_extension(
     "@aspect_bazel_lib//lib:extensions.bzl",
@@ -131,18 +122,25 @@ npm.npm_translate_lock(
     custom_postinstalls = {
         "@aspect-test/c": "echo moo > cow.txt",
         "@aspect-test/c@2.0.2": "echo mooo >> cow.txt",
+        "pngjs": "chmod -R a+X *",  # fixes malformed tarball content file permissions in this package after extraction (see https://github.com/aspect-build/rules_js/issues/1637 for more details)
     },
     data = [
         "//:examples/npm_deps/patches/meaning-of-life@1.0.0-pnpm.patch",
         "//:package.json",
         "//:pnpm-workspace.yaml",
         "//examples/js_binary:package.json",
+        "//examples/linked_consumer:package.json",
         "//examples/linked_empty_node_modules:package.json",
+        "//examples/linked_lib:package.json",
+        "//examples/linked_pkg:package.json",
         "//examples/macro:package.json",
         "//examples/npm_deps:package.json",
         "//examples/npm_package/libs/lib_a:package.json",
         "//examples/npm_package/packages/pkg_a:package.json",
         "//examples/npm_package/packages/pkg_b:package.json",
+        "//examples/npm_package/packages/pkg_d:package.json",
+        "//examples/npm_package/packages/pkg_e:package.json",
+        "//examples/runfiles:package.json",
         "//examples/webpack_cli:package.json",
         "//js/private/coverage/bundle:package.json",
         "//js/private/image:package.json",
@@ -152,6 +150,7 @@ npm.npm_translate_lock(
         "//npm/private/test:package.json",
         "//npm/private/test:vendored/lodash-4.17.21.tgz",
         "//npm/private/test/npm_package:package.json",
+        "//npm/private/test/npm_package_publish:package.json",
         "//npm/private/test/vendored/is-odd:package.json",
         "//npm/private/test/vendored/semver-max:package.json",
     ],
@@ -201,12 +200,6 @@ npm.npm_translate_lock(
         "unused": ["//visibility:private"],
         "@mycorp/pkg-a": ["//examples:__subpackages__"],
     },
-    patch_args = {
-        "*": ["-p1"],
-    },
-    patches = {
-        "meaning-of-life@1.0.0": ["//examples/npm_deps:patches/meaning-of-life@1.0.0-after_pnpm.patch"],
-    },
     pnpm_lock = "//:pnpm-lock.yaml",
     public_hoist_packages = {
         # Instructs the linker to hoist the ms@2.1.3 npm package to `node_modules/ms` in the `examples/npm_deps` package.
@@ -215,9 +208,6 @@ npm.npm_translate_lock(
         # other direct dependencies in the `examples/npm_deps/package.json`.
         "ms@2.1.3": ["examples/npm_deps"],
     },
-    replace_packages = {
-        "chalk@5.0.1": "@chalk_501//:pkg",
-    },
     update_pnpm_lock = True,
     verify_node_modules_ignored = "//:.bazelignore",
     verify_patches = "//examples/npm_deps/patches:patches",
@@ -225,12 +215,11 @@ npm.npm_translate_lock(
 use_repo(
     npm,
     "npm",
-    "npm__chalk__5.0.1__links",
     "npm__fsevents__2.3.2__links",
     "npm__rollup__2.70.2",
     "npm__rollup__2.70.2__links",
     "npm__unused__0.2.2__links",
-    "npm__webpack-bundle-analyzer__4.5.0__bufferutil_4.0.7",
+    "npm__webpack-bundle-analyzer__4.5.0_bufferutil_4.0.8",
 )
 
 # As an example, manually import a package using explicit coordinates.
@@ -240,7 +229,7 @@ npm.npm_import(
     bins = {"acorn": "./bin/acorn"},
     integrity = "sha512-ULr0LDaEqQrMFGyQ3bhJkLsbtrQ8QibAseGZeaSUiT/6zb9IvIkomWHJIvgvwad+hinRAgsI51JcWk2yvwyL+w==",
     package = "acorn",
-    # Root package where to link the virtual store
+    # Root package where to link the package store
     root_package = "",
     version = "8.4.0",
 )

@@ -7,6 +7,8 @@ Implementation details for js_run_devserver rule
 ## js_run_devserver
 
 <pre>
+load("@aspect_rules_js//js/private:js_run_devserver.bzl", "js_run_devserver")
+
 js_run_devserver(<a href="#js_run_devserver-name">name</a>, <a href="#js_run_devserver-tool">tool</a>, <a href="#js_run_devserver-command">command</a>, <a href="#js_run_devserver-grant_sandbox_write_permissions">grant_sandbox_write_permissions</a>, <a href="#js_run_devserver-use_execroot_entry_point">use_execroot_entry_point</a>,
                  <a href="#js_run_devserver-allow_execroot_entry_point_with_no_copy_data_to_bin">allow_execroot_entry_point_with_no_copy_data_to_bin</a>, <a href="#js_run_devserver-kwargs">kwargs</a>)
 </pre>
@@ -77,8 +79,8 @@ compatible with devserver watch modes in Node.js tools such as Webpack and Next.
 The custom sandbox is populated with the default outputs of all targets in `data`
 as well as transitive sources & npm links.
 
-As an optimization, virtual store files are explicitly excluded from the sandbox since the npm
-links will point to the virtual store in the execroot and Node.js will follow those links as it
+As an optimization, package store files are explicitly excluded from the sandbox since the npm
+links will point to the package store in the execroot and Node.js will follow those links as it
 does within the execroot. As a result, rules_js npm package link targets such as
 `//:node_modules/next` are handled efficiently. Since these targets are symlinks in the output
 tree, they are recreated as symlinks in the custom sandbox and do not incur a full copy of the

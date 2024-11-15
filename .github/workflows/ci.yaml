@@ -4,9 +4,9 @@ name: CI
 on:
     # Triggers the workflow on push or pull request events but only for the main branch
     push:
-        branches: [main]
+        branches: [main, 2.x]
     pull_request:
-        branches: [main]
+        branches: [main, 2.x]
 
     # Allows you to run this workflow manually from the Actions tab
     workflow_dispatch:
@@ -34,21 +34,6 @@ jobs:
                   )
                   printf -v j '{%s},' "${a[@]}"
                   echo "res=[${j%,}]" | tee -a $GITHUB_OUTPUT
-            - id: config
-              name: Prepare 'config' matrix axis
-              # Only run on main branch (or PR branches that contain 'rbe') to reduce the matrix size for PRs.
-              # Don't run RBE if there is no API key which is the case on forks.
-              run: |
-                  a=( local )
-                  if [[ "${{ github.ref_name }}" == "main" ]] || [[ "${{ github.head_ref }}" == *"rbe"* ]]; then
-                    if [[ "${{ env.BUILDBUDDY_API_KEY }}" ]]; then
-                      a+=( rbe )
-                    fi
-                  fi
-                  printf -v j '"%s",' "${a[@]}"
-                  echo "res=[${j%,}]" | tee -a $GITHUB_OUTPUT
-              env:
-                  BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
             - id: folder
               name: Prepare 'folder' matrix axis
               run: |
@@ -75,6 +60,7 @@ jobs:
                     e2e/pnpm_workspace
                     e2e/pnpm_workspace_deps
                     e2e/pnpm_workspace_rerooted
+                    e2e/runfiles
                     e2e/rules_foo
                     e2e/stamped_package_json
                     e2e/update_pnpm_lock
@@ -117,7 +103,6 @@ jobs:
                   echo "res=[${j%,}]" | tee -a $GITHUB_OUTPUT
         outputs:
             bazel-version: ${{ steps.bazel-version.outputs.res }}
-            config: ${{ steps.config.outputs.res }}
             folder: ${{ steps.folder.outputs.res }}
             os: ${{ steps.os.outputs.res }}
 
@@ -131,19 +116,20 @@ jobs:
                 bazel-version: ${{ fromJSON(needs.matrix-prep.outputs.bazel-version) }}
                 bzlmod: [1, 0]
                 os: ${{ fromJSON(needs.matrix-prep.outputs.os) }}
-                config: ${{ fromJSON(needs.matrix-prep.outputs.config) }}
                 folder: ${{ fromJSON(needs.matrix-prep.outputs.folder) }}
                 exclude:
                     # Exclude Windows default, will opt-in to includes
                     - os: windows
                     # Exclude MacOS by default, will opt-in to includes
                     - os: macos
+                    # Don't run bzlmod smoke test under workspace
                     - bzlmod: 0
                       folder: e2e/bzlmod
-                    # Don't run RBE tests with Bazel 6 to reduce the size of the test matrix
+                    # Don't run replace_packages test with bzlmod+Bazel 6 due to use of Bazel 7 bzlmod features
                     - bazel-version:
                           major: 6
-                      config: rbe
+                    - bzlmod: 1
+                      folder: e2e/npm_translate_lock_replace_packages
                     # Don't run bzlmod tests with Bazel 6 to reduce the size of the test matrix
                     - bazel-version:
                           major: 6
@@ -151,9 +137,6 @@ jobs:
                     # Don't run workspace smoke test under bzlmod
                     - bzlmod: 1
                       folder: e2e/workspace
-                    # Don't run update_pnpm_lock under bzlmod
-                    - bzlmod: 1
-                      folder: e2e/update_pnpm_lock
                     # rules_docker is not compatible with Bazel 7
                     - bazel-version:
                           major: 7
@@ -167,10 +150,6 @@ jobs:
                       folder: e2e/npm_link_package
                     - bzlmod: 1
                       folder: e2e/rules_foo
-                    - bazel-version:
-                          major: 7
-                      bzlmod: 1
-                      folder: e2e/update_pnpm_lock_with_import
                     # gyp_no_install_script is broken in an usual way on 6.5.0
                     # that is not worth investigating as we're dropping Bazel 6 support soon
                     - bazel-version:
@@ -214,7 +193,7 @@ jobs:
 
             # Setup an ssh keypair and github.com in known_hosts for e2e/git_dep_metadata,
             # which exercises fetching a git repository via ssh.
-            - uses: webfactory/ssh-agent@v0.8.0
+            - uses: webfactory/ssh-agent@v0.9.0
               env:
                   ASPECT_GHTESTER_SSH_KEY: ${{ secrets.ASPECT_GHTESTER_SSH_KEY }}
               if: env.ASPECT_GHTESTER_SSH_KEY != ''
@@ -229,11 +208,11 @@ jobs:
                       ~/.cache/bazel-repository-cache
                       ~/.cache/xdg-cache
                   key: >-
-                      bazel-cache-${{ matrix.bazel-version.version }}-${{ matrix.bzlmod }}-${{ matrix.os }}-${{ matrix.config }}-${{ matrix.folder }}-
+                      bazel-cache-${{ matrix.bazel-version.version }}-${{ matrix.bzlmod }}-${{ matrix.os }}-${{ matrix.folder }}-
                       ${{ hashFiles('.bazelrc', '.bazelversion', '.bazeliskrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'WORKSPACE', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'MODULE.bazel', '**/*.js', '!e2e') }}-
                       ${{ hashFiles(format('{0}/.bazelrc', matrix.folder), format('{0}/.bazelversion', matrix.folder), format('{0}/.bazeliskrc', matrix.folder), format('{0}/**/BUILD', matrix.folder), format('{0}/**/BUILD.bazel', matrix.folder), format('{0}/**/*.bzl', matrix.folder), format('{0}/WORKSPACE', matrix.folder), format('{0}/WORKSPACE.bazel', matrix.folder), format('{0}/WORKSPACE.bzlmod', matrix.folder), format('{0}/MODULE.bazel', matrix.folder), format('{0}/MODULE.bazel.lock', matrix.folder), format('{0}/**/*.js', matrix.folder)) }}
                   restore-keys: |
-                      bazel-cache-${{ matrix.bazel-version.version }}-${{ matrix.bzlmod }}-${{ matrix.os }}-${{ matrix.config }}-${{ matrix.folder }}-
+                      bazel-cache-${{ matrix.bazel-version.version }}-${{ matrix.bzlmod }}-${{ matrix.os }}-${{ matrix.folder }}-
 
             - name: Configure Bazel version
               working-directory: ${{ matrix.folder }}
@@ -248,18 +227,6 @@ jobs:
                   # root .bazelrc brings these in with try-imports. In this CI workflows, we explicitly
                   # bring in the version specific bazelrc file with --bazelrc when we invoke bazel.
                   rm ${GITHUB_WORKSPACE//\\/\/}/.aspect/bazelrc/bazel*.bazelrc
-
-            - name: Write RBE credentials
-              # Writes RBE credential files
-              if: matrix.config == 'rbe'
-              working-directory: ${{ matrix.folder }}
-              shell: bash
-              run: |
-                  touch $HOME/.bazelrc
-                  chmod 0600 $HOME/.bazelrc
-                  echo "build --remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" > $HOME/.bazelrc
-              env:
-                  BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
 
             # TODO: remove this block once we have Aspect CLI Windows releases
             - name: Don't use Aspect CLI on Windows
@@ -277,9 +244,9 @@ jobs:
                     --bazelrc=${GITHUB_WORKSPACE//\\/\/}/.aspect/bazelrc/ci.bazelrc \
                     --bazelrc=${GITHUB_WORKSPACE//\\/\/}/.github/workflows/ci.bazelrc \
                     test \
-                    --config=${{ matrix.config }} \
-                    --test_tag_filters=-skip-on-${{ matrix.config }},-skip-on-bazel${{ matrix.bazel-version.major }} \
-                    --build_tag_filters=-skip-on-${{ matrix.config }},-skip-on-bazel${{ matrix.bazel-version.major }} \
+                    --config=local \
+                    --test_tag_filters=-skip-on-bazel${{ matrix.bazel-version.major }} \
+                    --build_tag_filters=-skip-on-bazel${{ matrix.bazel-version.major }} \
                     --enable_bzlmod=${{ matrix.bzlmod }} \
                     //...
               env:
@@ -311,7 +278,7 @@ jobs:
               # Don't run on RBE. Coverage does not work properly with RBE. See: bazelbuild/bazel#4685.
               # Don't run coverage on e2e/bzlmod. It fails evaluating js/private/coverage/BUILD.bazel because write_source_files is not yet bzlmod compatible.
               # Don't run coverage on Windows. It is currently broken.
-              if: matrix.config == 'local' && matrix.os != 'windows'
+              if: matrix.os != 'windows'
               working-directory: ${{ matrix.folder }}
               shell: bash
               run: |
@@ -320,9 +287,9 @@ jobs:
                     --bazelrc=${GITHUB_WORKSPACE//\\/\/}/.aspect/bazelrc/ci.bazelrc \
                     --bazelrc=${GITHUB_WORKSPACE//\\/\/}/.github/workflows/ci.bazelrc \
                     coverage \
-                    --config=${{ matrix.config }} \
-                    --test_tag_filters=-skip-on-${{ matrix.config }},-skip-on-bazel${{ matrix.bazel-version.major }} \
-                    --build_tag_filters=-skip-on-${{ matrix.config }},-skip-on-bazel${{ matrix.bazel-version.major }} \
+                    --config=local \
+                    --test_tag_filters=-skip-on-bazel${{ matrix.bazel-version.major }} \
+                    --build_tag_filters=-skip-on-bazel${{ matrix.bazel-version.major }} \
                     --enable_bzlmod=${{ matrix.bzlmod }} \
                     --instrument_test_targets \
                     //...
@@ -345,3 +312,24 @@ jobs:
                   ASPECT_NPM_AUTH_TOKEN: ${{ secrets.ASPECT_NPM_AUTH_TOKEN }}
                   ASPECT_RULES_JS_FROZEN_PNPM_LOCK: 1
                   XDG_CACHE_HOME: ~/.cache/xdg-cache # bazelisk will download bazel to here
+
+    # For branch protection settings, this job provides a "stable" name that can be used to gate PR merges
+    # on "all matrix jobs were successful".
+    conclusion:
+        needs: test
+        runs-on: ubuntu-latest
+        if: always()
+        steps:
+            - uses: technote-space/workflow-conclusion-action@45ce8e0eb155657ab8ccf346ade734257fd196a5 # v3.0.3
+
+            # Note: possible conclusion values:
+            # https://github.com/technote-space/workflow-conclusion-action/blob/main/src/constant.ts
+            - name: report success
+              if: ${{ env.WORKFLOW_CONCLUSION == 'success' }}
+              working-directory: /tmp
+              run: echo ${{ env.WORKFLOW_CONCLUSION }} && exit 0
+
+            - name: report failure
+              if: ${{ env.WORKFLOW_CONCLUSION == 'failure' }}
+              working-directory: /tmp
+              run: echo ${{ env.WORKFLOW_CONCLUSION }} && exit 1

@@ -1,315 +1,86 @@
 "Utility functions for npm rules"
 
-load("@aspect_bazel_lib//lib:utils.bzl", "is_bazel_6_or_greater")
 load("@aspect_bazel_lib//lib:paths.bzl", "relative_file")
 load("@aspect_bazel_lib//lib:repo_utils.bzl", "repo_utils")
 load("@bazel_skylib//lib:paths.bzl", "paths")
-load("@bazel_skylib//lib:types.bzl", "types")
-load(":yaml.bzl", _parse_yaml = "parse")
 
 INTERNAL_ERROR_MSG = "ERROR: rules_js internal error, please file an issue: https://github.com/aspect-build/rules_js/issues"
+DEFAULT_REGISTRY_DOMAIN = "registry.npmjs.org"
+DEFAULT_REGISTRY_DOMAIN_SLASH = "{}/".format(DEFAULT_REGISTRY_DOMAIN)
 DEFAULT_REGISTRY_PROTOCOL = "https"
 DEFAULT_EXTERNAL_REPOSITORY_ACTION_CACHE = ".aspect/rules/external_repository_action_cache"
 
-def _sanitize_string(string):
+def _sorted_map(m):
+    result = dict()
+    for key in sorted(m.keys()):
+        result[key] = m[key]
+
+    return result
+
+def _sanitize_rule_name(string):
     # Workspace names may contain only A-Z, a-z, 0-9, '-', '_' and '.'
     result = ""
-    for i in range(0, len(string)):
-        c = string[i]
+    for c in string.elems():
         if c == "@" and (not result or result[-1] == "_"):
             result += "at"
         if not c.isalnum() and c != "-" and c != "_" and c != ".":
             c = "_"
         result += c
-    return result
+    return result.strip("_-")
 
 def _bazel_name(name, version = None):
     "Make a bazel friendly name from a package name and (optionally) a version that can be used in repository and target names"
-    escaped_name = _sanitize_string(name)
+    escaped_name = _sanitize_rule_name(name)
     if not version:
         return escaped_name
-    version_segments = version.split("_")
-    escaped_version = _sanitize_string(version_segments[0])
-    peer_version = "_".join(version_segments[1:])
-    if peer_version:
-        escaped_version = "%s__%s" % (escaped_version, _sanitize_string(peer_version))
-    return "%s__%s" % (escaped_name, escaped_version)
 
-def _strip_peer_dep_or_patched_version(version):
-    "Remove peer dependency or patched syntax from version string"
+    # Separate name + version with extra _
+    return "%s__%s" % (escaped_name, _sanitize_rule_name(version))
 
-    # 21.1.0_rollup@2.70.2 becomes 21.1.0
-    # 1.0.0_o3deharooos255qt5xdujc3cuq becomes 1.0.0
-    index = version.find("_")
-    if index != -1:
-        return version[:index]
-    return version
-
-def _pnpm_name(name, version):
+def _package_key(name, version):
     "Make a name/version pnpm-style name for a package name and version"
-    return "%s/%s" % (name, version)
-
-def _parse_pnpm_package_key(pnpm_name, pnpm_version):
-    if pnpm_version.startswith("link:") or pnpm_version.startswith("file:"):
-        return pnpm_name, "0.0.0"
-
-    if not pnpm_version.startswith("/"):
-        if not pnpm_name:
-            fail("parse_pnpm_package_key: pnpm_name is empty for non-versioned package %s" % pnpm_version)
-
-        return pnpm_name, pnpm_version
-
-    # Parse a package key such as:
-    #    /name/version
-    #    /@scope/name/version
-    #    registry.com/name/version
-    #
-    # return a (name, version) tuple. This format is found in pnpm lock file v5.
-    _, pnpm_version = pnpm_version.split("/", 1)
-
-    segments = pnpm_version.rsplit("/", 1)
-    if len(segments) != 2:
-        msg = "unexpected pnpm versioned name {}".format(pnpm_version)
-        fail(msg)
-    return (segments[0], segments[1])
-
-def _convert_pnpm_v6_version_peer_dep(version):
-    # Covert a pnpm lock file v6 version string of the format
-    # version(@scope/peer@version)(@scope/peer@version)
-    # to a pnpm lock file v5 version_peer_version that is compatible with rules_js.
-    if version[-1] == ")":
-        # Drop the patch_hash= not present in v5 so (patch_hash=123) -> (123) like v5
-        version = version.replace("(patch_hash=", "(")
-
-        # There is a peer dep if the string ends with ")"
-        peer_dep_index = version.find("(")
-        peer_dep = version[peer_dep_index:]
-        if len(peer_dep) > 32:
-            # Prevent long paths. The pnpm lockfile v6 no longer hashes long sequences of
-            # peer deps so we must hash here to prevent extremely long file paths that lead to
-            # "File name too long) build failures.
-            peer_dep = "_" + _hash(peer_dep)
-        version = version[0:peer_dep_index] + _sanitize_string(peer_dep)
-        version = version.rstrip("_")
-    return version
-
-def _convert_pnpm_v6_package_name(package_name):
-    # Covert a pnpm lock file v6 /name/version string of the format
-    # @scope/name@version(@scope/name@version)(@scope/name@version)
-    # to a pnpm lock file v5 @scope/name/version_peer_version format that is compatible with rules_js.
-    if package_name.startswith("/"):
-        package_name = _convert_pnpm_v6_version_peer_dep(package_name)
-        segments = package_name.rsplit("@", 1)
-        if len(segments) != 2:
-            msg = "unexpected pnpm versioned name {}".format(package_name)
-            fail(msg)
-        return "%s/%s" % (segments[0], segments[1])
-    else:
-        return _convert_pnpm_v6_version_peer_dep(package_name)
-
-def _convert_v6_importers(importers):
-    # Convert pnpm lockfile v6 importers to a rules_js compatible ~v5 format.
-    #
-    # v5 importers:
-    #   specifiers:
-    #      pkg-a: 1.2.3
-    #      pkg-b: ^4.5.6
-    #   deps:
-    #      pkg-a: 1.2.3
-    #   devDeps:
-    #      pkg-b: 4.10.1
-    #   ...
-    #
-    # v6 pushed the 'specifiers' and 'version' into subproperties:
-    #
-    #   deps:
-    #      pkg-a:
-    #         specifier: 1.2.3
-    #         version: 1.2.3
-    #   devDeps:
-    #      pkg-b:
-    #          specifier: ^4.5.6
-    #          version: 4.10.1
-
-    result = {}
-    for import_path, importer in importers.items():
-        result[import_path] = {}
-        for key in ["dependencies", "optionalDependencies", "devDependencies"]:
-            deps = importer.get(key, None)
-            if deps != None:
-                result[import_path][key] = {}
-                for name, attributes in deps.items():
-                    result[import_path][key][name] = _convert_pnpm_v6_package_name(attributes.get("version"))
-    return result
-
-def _convert_v6_packages(packages):
-    # Convert pnpm lockfile v6 importers to a rules_js compatible ~v5 format.
-    #
-    # v6 package metadata mainly changed formatting of metadata such as:
-    #
-    # dependency versions with peers:
-    #   v5: 2.0.0_@aspect-test+c@2.0.2
-    #   v6: 2.0.0(@aspect-test/c@2.0.2)
-
-    result = {}
-    for package, package_info in packages.items():
-        # convert v6 package dependencies + optionalDependencies
-        for key in ["dependencies", "optionalDependencies"]:
-            deps = package_info.get(key, None)
-            if deps != None:
-                dependencies = {}
-                for dep_name, dep_version in deps.items():
-                    dependencies[dep_name] = _convert_pnpm_v6_package_name(dep_version)
-                package_info[key] = dependencies
-
-        result[_convert_pnpm_v6_package_name(package)] = package_info
-    return result
-
-def _parse_pnpm_lock_yaml(content):
-    """Parse the content of a pnpm-lock.yaml file.
-
-    Args:
-        content: lockfile content
-
-    Returns:
-        A tuple of (importers dict, packages dict, patched_dependencies dict, error string)
-    """
-    parsed, err = _parse_yaml(content)
-    return _parse_pnpm_lock_common(parsed, err)
-
-def _parse_pnpm_lock_json(content):
-    """Parse the content of a pnpm-lock.yaml file.
-
-    Args:
-        content: lockfile content as json
-
-    Returns:
-        A tuple of (importers dict, packages dict, patched_dependencies dict, error string)
-    """
-    return _parse_pnpm_lock_common(json.decode(content) if content else None, None)
-
-def _parse_pnpm_lock_common(parsed, err):
-    """Helper function used by _parse_pnpm_lock_yaml and _parse_pnpm_lock_json.
-
-    Args:
-        parsed: lockfile content object
-        err: any errors from pasring
-
-    Returns:
-        A tuple of (importers dict, packages dict, patched_dependencies dict, error string)
-    """
-    if err != None or parsed == None or parsed == {}:
-        return {}, {}, {}, err
-
-    if not types.is_dict(parsed):
-        return {}, {}, {}, "lockfile should be a starlark dict"
-    if "lockfileVersion" not in parsed.keys():
-        return {}, {}, {}, "expected lockfileVersion key in lockfile"
-
-    # Lockfile version may be a float such as 5.4 or a string such as '6.0'
-    lockfile_version = str(parsed["lockfileVersion"])
-    lockfile_version = lockfile_version.lstrip("'")
-    lockfile_version = lockfile_version.rstrip("'")
-    lockfile_version = lockfile_version.lstrip("\"")
-    lockfile_version = lockfile_version.rstrip("\"")
-    lockfile_version = float(lockfile_version)
-    _assert_lockfile_version(lockfile_version)
-
-    importers = parsed.get("importers", {
-        ".": {
-            "dependencies": parsed.get("dependencies", {}),
-            "optionalDependencies": parsed.get("optionalDependencies", {}),
-            "devDependencies": parsed.get("devDependencies", {}),
-        },
-    })
-
-    packages = parsed.get("packages", {})
-
-    if lockfile_version >= 6.0:
-        # special handling for lockfile v6 which had breaking changes
-        importers = _convert_v6_importers(importers)
-        packages = _convert_v6_packages(packages)
-
-    patched_dependencies = parsed.get("patchedDependencies", {})
-
-    return importers, packages, patched_dependencies, None
-
-def _assert_lockfile_version(version, testonly = False):
-    if type(version) != type(1.0):
-        fail("version should be passed as a float")
-
-    # Restrict the supported lock file versions to what this code has been tested with:
-    #   5.3 - pnpm v6.x.x
-    #   5.4 - pnpm v7.0.0 bumped the lockfile version to 5.4
-    #   6.0 - pnpm v8.0.0 bumped the lockfile version to 6.0; this included breaking changes
-    #   6.1 - pnpm v8.6.0 bumped the lockfile version to 6.1
-    min_lock_version = 5.3
-    max_lock_version = 6.1
-    msg = None
-
-    if version < min_lock_version:
-        msg = "npm_translate_lock requires lock_version at least {min}, but found {actual}. Please upgrade to pnpm v6 or greater.".format(
-            min = min_lock_version,
-            actual = version,
-        )
-    if version > max_lock_version:
-        msg = "npm_translate_lock currently supports a maximum lock_version of {max}, but found {actual}. Please file an issue on rules_js".format(
-            max = max_lock_version,
-            actual = version,
-        )
-    if msg and not testonly:
-        fail(msg)
-    return msg
+    return "%s@%s" % (name, version)
 
 def _friendly_name(name, version):
     "Make a name@version developer-friendly name for a package name and version"
     return "%s@%s" % (name, version)
 
-def _virtual_store_name(name, version):
-    "Make a virtual store name for a given package and version"
+def _package_store_name(pnpm_name, pnpm_version):
+    "Make a package store name for a given package and version"
+
+    if pnpm_version.startswith("link:") or pnpm_version.startswith("file:"):
+        name = pnpm_name
+        version = "0.0.0"
+    elif pnpm_version.startswith("npm:"):
+        name, version = pnpm_version[4:].rsplit("@", 1)
+    else:
+        name = pnpm_name
+        version = pnpm_version
+
     if version.startswith("@"):
-        # Special case where the package name should _not_ be included in the virtual store name.
+        # Special case where the package name should _not_ be included in the package store name.
         # See https://github.com/aspect-build/rules_js/issues/423 for more context.
         return version.replace("/", "+")
     else:
         escaped_name = name.replace("/", "+")
-        escaped_version = version.replace("/", "+")
+        escaped_version = version.replace("://", "/").replace("/", "+")
         return "%s@%s" % (escaped_name, escaped_version)
 
-def _make_symlink(ctx, symlink_path, target_file):
-    files = []
-    if ctx.attr.use_declare_symlink:
-        symlink = ctx.actions.declare_symlink(symlink_path)
-        ctx.actions.symlink(
-            output = symlink,
-            target_path = relative_file(target_file.path, symlink.path),
-        )
-        files.append(target_file)
-    else:
-        if _is_at_least_bazel_6() and target_file.is_directory:
-            # BREAKING CHANGE in Bazel 6 requires you to use declare_directory if your target_file
-            # in ctx.actions.symlink is a directory artifact
-            symlink = ctx.actions.declare_directory(symlink_path)
-        else:
-            symlink = ctx.actions.declare_file(symlink_path)
-        ctx.actions.symlink(
-            output = symlink,
-            target_file = target_file,
-        )
-    files.append(symlink)
-    return files
-
-def _is_at_least_bazel_6():
-    # Hacky way to check if the we're using at least Bazel 6. Would be nice if there was a ctx.bazel_version instead.
-    # native.bazel_version only works in repository rules.
-    return "apple_binary" not in dir(native)
+def _make_symlink(ctx, symlink_path, target_path):
+    symlink = ctx.actions.declare_symlink(symlink_path)
+    ctx.actions.symlink(
+        output = symlink,
+        target_path = relative_file(target_path, symlink.path),
+    )
+    return symlink
 
 def _parse_package_name(package):
     # Parse a @scope/name string and return a (scope, name) tuple
-    segments = package.split("/", 1)
-    if len(segments) == 2 and segments[0].startswith("@"):
-        return (segments[0], segments[1])
-    return ("", segments[0])
+    if package[0] == "@":
+        scope_end = package.find("/", 1)
+        if scope_end > 0:
+            return (package[0:scope_end], package[scope_end + 1:])
+    return ("", package)
 
 def _npm_registry_url(package, registries, default_registry):
     (package_scope, _) = _parse_package_name(package)
@@ -326,7 +97,8 @@ def _npm_registry_download_url(package, version, registries, default_registry):
         registry.removesuffix("/"),
         package,
         package_name_no_scope,
-        _strip_peer_dep_or_patched_version(version),
+        # Strip the rules_js peer/patch metadata off the version. See pnpm.bzl
+        version[:version.find("_")] if version.find("_") != -1 else version,
     )
 
 def _is_git_repository_url(url):
@@ -335,8 +107,8 @@ def _is_git_repository_url(url):
 def _to_registry_url(url):
     return "{}://{}".format(DEFAULT_REGISTRY_PROTOCOL, url) if url.find("//") == -1 else url
 
-def _default_registry():
-    return _to_registry_url("registry.npmjs.org/")
+def _default_registry_url():
+    return _to_registry_url(DEFAULT_REGISTRY_DOMAIN_SLASH)
 
 def _hash(s):
     # Bazel's hash() resolves to a 32-bit signed integer [-2,147,483,648 to 2,147,483,647].
@@ -354,15 +126,6 @@ def _dicts_match(a, b):
         if a[key] != b[key]:
             return False
     return True
-
-# Generate a consistent label string between Bazel versions.
-def _consistent_label_str(label):
-    return "//{}:{}".format(
-        # Starting in Bazel 6, the workspace name is empty for the local workspace and there's no other way to determine it.
-        # This behavior differs from Bazel 5 where the local workspace name was fully qualified in str(label).
-        label.package,
-        label.name,
-    )
 
 # Copies a file from the external repository to the same relative location in the source tree
 def _reverse_force_copy(rctx, label, dst = None):
@@ -428,14 +191,6 @@ if [ ! -f $1 ]; then exit 42; fi
     else:
         fail(INTERNAL_ERROR_MSG)
 
-# TODO(2.0): move this to aspect_bazel_lib
-def _home_directory(rctx):
-    if "HOME" in rctx.os.environ and not repo_utils.is_windows(rctx):
-        return rctx.os.environ["HOME"]
-    if "USERPROFILE" in rctx.os.environ and repo_utils.is_windows(rctx):
-        return rctx.os.environ["USERPROFILE"]
-    return None
-
 def _replace_npmrc_token_envvar(token, npmrc_path, environ):
     # A token can be a reference to an environment variable
     if token.startswith("$"):
@@ -453,11 +208,6 @@ WARNING: Issue while reading "{npmrc}". Failed to replace env in config: ${{{tok
                 token = token,
             ))
     return token
-
-def _is_vendored_tarfile(package_snapshot):
-    if "resolution" in package_snapshot:
-        return "tarball" in package_snapshot["resolution"]
-    return False
 
 def _default_external_repository_action_cache():
     return DEFAULT_EXTERNAL_REPOSITORY_ACTION_CACHE
@@ -492,36 +242,32 @@ def _is_tarball_extension(ext):
 
 utils = struct(
     bazel_name = _bazel_name,
-    pnpm_name = _pnpm_name,
-    assert_lockfile_version = _assert_lockfile_version,
-    parse_pnpm_package_key = _parse_pnpm_package_key,
-    parse_pnpm_lock_yaml = _parse_pnpm_lock_yaml,
-    parse_pnpm_lock_json = _parse_pnpm_lock_json,
+    sorted_map = _sorted_map,
+    package_key = _package_key,
     friendly_name = _friendly_name,
-    virtual_store_name = _virtual_store_name,
-    strip_peer_dep_or_patched_version = _strip_peer_dep_or_patched_version,
+    package_store_name = _package_store_name,
     make_symlink = _make_symlink,
-    # Symlinked node_modules structure virtual store path under node_modules
-    virtual_store_root = ".aspect_rules_js",
+    # Symlinked node_modules structure package store path under node_modules
+    package_store_root = ".aspect_rules_js",
     # Suffix for npm_import links repository
     links_repo_suffix = "__links",
-    # Output group name for the package directory of a linked package
+    # Output group name for the package directory of a linked npm package
     package_directory_output_group = "package_directory",
     npm_registry_url = _npm_registry_url,
     npm_registry_download_url = _npm_registry_download_url,
-    parse_package_name = _parse_package_name,
     is_git_repository_url = _is_git_repository_url,
     to_registry_url = _to_registry_url,
     default_external_repository_action_cache = _default_external_repository_action_cache,
-    default_registry = _default_registry,
+    default_registry = _default_registry_url,
     hash = _hash,
     dicts_match = _dicts_match,
-    consistent_label_str = _consistent_label_str,
-    bzlmod_supported = is_bazel_6_or_greater(),
     reverse_force_copy = _reverse_force_copy,
     exists = _exists,
-    home_directory = _home_directory,
     replace_npmrc_token_envvar = _replace_npmrc_token_envvar,
-    is_vendored_tarfile = _is_vendored_tarfile,
     is_tarball_extension = _is_tarball_extension,
+)
+
+# Exported only to be tested
+utils_test = struct(
+    parse_package_name = _parse_package_name,
 )

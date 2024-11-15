@@ -1,5 +1,5 @@
-load(":test.bzl", "coverage_fail_test", "coverage_pass_test")
 load("//js/private/coverage:merger.bzl", "coverage_merger")
+load(":test.bzl", "coverage_fail_test", "coverage_pass_test")
 
 FAIL_CMD = """\
 echo "require('fs').writeFileSync(process.env.COVERAGE_OUTPUT_FILE, '# no coverage');" >> $@
@@ -24,14 +24,10 @@ coverage_fail_test(
     name = "fail",
     data = ["lib.js"],
     enable_runfiles = select({
-        "@aspect_rules_js//js:enable_runfiles": True,
+        "@aspect_bazel_lib//lib:enable_runfiles": True,
         "//conditions:default": False,
     }),
     entry_point = "lib.js",
-    unresolved_symlinks_enabled = select({
-        "@aspect_rules_js//js:allow_unresolved_symlinks": True,
-        "//conditions:default": False,
-    }),
 )
 
 PASS_CMD = """\
@@ -56,12 +52,8 @@ coverage_pass_test(
     name = "pass",
     data = ["lib.js"],
     enable_runfiles = select({
-        "@aspect_rules_js//js/private:enable_runfiles": True,
+        "@aspect_bazel_lib//lib:enable_runfiles": True,
         "//conditions:default": False,
     }),
     entry_point = "lib.js",
-    unresolved_symlinks_enabled = select({
-        "@aspect_rules_js//js:allow_unresolved_symlinks": True,
-        "//conditions:default": False,
-    }),
 )

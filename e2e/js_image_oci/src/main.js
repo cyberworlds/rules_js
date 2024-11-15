@@ -39,6 +39,16 @@ console.log(
 )
 console.log('')
 
+const pkgA = require('@mycorp/pkg-a')
+console.log(`@mycorp/pkg-a acorn@${pkgA.getAcornVersion()}`)
+console.log(`@mycorp/pkg-a uuid@${pkgA.getUuidVersion()}`)
+console.log('')
+
+const pkgB = require('@mycorp/pkg-b')
+console.log(`@mycorp/pkg-b acorn@${pkgB.getAcornVersion()}`)
+console.log(`@mycorp/pkg-b uuid@${pkgB.getUuidVersion()}`)
+console.log('')
+
 console.log(
     chalk.bold.bgYellow(' SOURCE CHECK '),
     space,
@@ -48,7 +58,6 @@ console.log(
         )
     )
 )
-
 console.log(
     chalk.bold.bgMagenta(' DIRECTORY CHECK '),
     space,
@@ -58,7 +67,6 @@ console.log(
         )
     )
 )
-
 console.log(
     chalk.bold.bgMagenta(' SOURCE DIRECTORY CHECK '),
     space,
@@ -68,7 +76,6 @@ console.log(
         )
     )
 )
-
 console.log(
     chalk.bold.bgWhite(' PROTO CHECK '),
     space,

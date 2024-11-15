@@ -1,1 +1,6 @@
-exports_files(["patched-dependencies-test.js"])
+# gazelle:exclude **/snapshots/**/*
+
+exports_files([
+    "base/patched-dependencies-test.js",
+    "base/aliases-test.js",
+])

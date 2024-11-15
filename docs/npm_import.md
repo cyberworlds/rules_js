@@ -11,7 +11,7 @@ load("@aspect_rules_js//npm:repositories.bzl", "npm_import")
 This uses Bazel's downloader to fetch the packages.
 You can use this to redirect all fetches through a store like Artifactory.
 
-See &lt;https://blog.aspect.dev/configuring-bazels-downloader&gt; for more info about how it works
+See &lt;https://blog.aspect.build/configuring-bazels-downloader&gt; for more info about how it works
 and how to configure it.
 
 See [`npm_translate_lock`](#npm_translate_lock) for the primary user-facing API to fetch npm packages
@@ -22,13 +22,13 @@ for a given lockfile.
 ## npm_import
 
 <pre>
+load("@aspect_rules_js//npm/private:npm_import.bzl", "npm_import")
+
 npm_import(<a href="#npm_import-name">name</a>, <a href="#npm_import-package">package</a>, <a href="#npm_import-version">version</a>, <a href="#npm_import-deps">deps</a>, <a href="#npm_import-extra_build_content">extra_build_content</a>, <a href="#npm_import-transitive_closure">transitive_closure</a>, <a href="#npm_import-root_package">root_package</a>,
            <a href="#npm_import-link_workspace">link_workspace</a>, <a href="#npm_import-link_packages">link_packages</a>, <a href="#npm_import-lifecycle_hooks">lifecycle_hooks</a>, <a href="#npm_import-lifecycle_hooks_execution_requirements">lifecycle_hooks_execution_requirements</a>,
            <a href="#npm_import-lifecycle_hooks_env">lifecycle_hooks_env</a>, <a href="#npm_import-lifecycle_hooks_use_default_shell_env">lifecycle_hooks_use_default_shell_env</a>, <a href="#npm_import-integrity">integrity</a>, <a href="#npm_import-url">url</a>, <a href="#npm_import-commit">commit</a>,
            <a href="#npm_import-replace_package">replace_package</a>, <a href="#npm_import-package_visibility">package_visibility</a>, <a href="#npm_import-patch_args">patch_args</a>, <a href="#npm_import-patches">patches</a>, <a href="#npm_import-custom_postinstall">custom_postinstall</a>, <a href="#npm_import-npm_auth">npm_auth</a>,
-           <a href="#npm_import-npm_auth_basic">npm_auth_basic</a>, <a href="#npm_import-npm_auth_username">npm_auth_username</a>, <a href="#npm_import-npm_auth_password">npm_auth_password</a>, <a href="#npm_import-bins">bins</a>, <a href="#npm_import-dev">dev</a>,
-           <a href="#npm_import-register_copy_directory_toolchains">register_copy_directory_toolchains</a>, <a href="#npm_import-register_copy_to_directory_toolchains">register_copy_to_directory_toolchains</a>,
-           <a href="#npm_import-run_lifecycle_hooks">run_lifecycle_hooks</a>, <a href="#npm_import-lifecycle_hooks_no_sandbox">lifecycle_hooks_no_sandbox</a>, <a href="#npm_import-kwargs">kwargs</a>)
+           <a href="#npm_import-npm_auth_basic">npm_auth_basic</a>, <a href="#npm_import-npm_auth_username">npm_auth_username</a>, <a href="#npm_import-npm_auth_password">npm_auth_password</a>, <a href="#npm_import-bins">bins</a>, <a href="#npm_import-dev">dev</a>, <a href="#npm_import-kwargs">kwargs</a>)
 </pre>
 
 Import a single npm package into Bazel.
@@ -123,7 +123,7 @@ To change the proxy URL we use to fetch, configure the Bazel downloader:
 1. Point bazel to the config with a line in .bazelrc like
 common --experimental_downloader_config=.bazel_downloader_config
 
-Read more about the downloader config: <https://blog.aspect.dev/configuring-bazels-downloader>
+Read more about the downloader config: <https://blog.aspect.build/configuring-bazels-downloader>
 
 [UrlRewriterConfig]: https://github.com/bazelbuild/bazel/blob/4.2.1/src/main/java/com/google/devtools/build/lib/bazel/repository/downloader/UrlRewriterConfig.java#L66
 
@@ -139,7 +139,7 @@ Read more about the downloader config: <https://blog.aspect.dev/configuring-baze
 | <a id="npm_import-deps"></a>deps |  A dict other npm packages this one depends on where the key is the package name and value is the version   |  `{}` |
 | <a id="npm_import-extra_build_content"></a>extra_build_content |  Additional content to append on the generated BUILD file at the root of the created repository, either as a string or a list of lines similar to <https://github.com/bazelbuild/bazel-skylib/blob/main/docs/write_file_doc.md>.   |  `""` |
 | <a id="npm_import-transitive_closure"></a>transitive_closure |  A dict all npm packages this one depends on directly or transitively where the key is the package name and value is a list of version(s) depended on in the closure.   |  `{}` |
-| <a id="npm_import-root_package"></a>root_package |  The root package where the node_modules virtual store is linked to. Typically this is the package that the pnpm-lock.yaml file is located when using `npm_translate_lock`.   |  `""` |
+| <a id="npm_import-root_package"></a>root_package |  The root package where the node_modules package store is linked to. Typically this is the package that the pnpm-lock.yaml file is located when using `npm_translate_lock`.   |  `""` |
 | <a id="npm_import-link_workspace"></a>link_workspace |  The workspace name where links will be created for this package.<br><br>This is typically set in rule sets and libraries that are to be consumed as external repositories so links are created in the external repository and not the user workspace.<br><br>Can be left unspecified if the link workspace is the user workspace.   |  `""` |
 | <a id="npm_import-link_packages"></a>link_packages |  Dict of paths where links may be created at for this package to a list of link aliases to link as in each package. If aliases are an empty list this indicates to link as the package name.<br><br>Defaults to {} which indicates that links may be created in any package as specified by the `direct` attribute of the generated npm_link_package.   |  `{}` |
 | <a id="npm_import-lifecycle_hooks"></a>lifecycle_hooks |  List of lifecycle hook `package.json` scripts to run for this package if they exist.   |  `[]` |
@@ -153,17 +153,13 @@ Read more about the downloader config: <https://blog.aspect.dev/configuring-baze
 | <a id="npm_import-package_visibility"></a>package_visibility |  Visibility of generated node_module link targets.   |  `["//visibility:public"]` |
 | <a id="npm_import-patch_args"></a>patch_args |  Arguments to pass to the patch tool.<br><br>`-p1` will usually be needed for patches generated by git.   |  `["-p0"]` |
 | <a id="npm_import-patches"></a>patches |  Patch files to apply onto the downloaded npm package.   |  `[]` |
-| <a id="npm_import-custom_postinstall"></a>custom_postinstall |  Custom string postinstall script to run on the installed npm package. Runs after any existing lifecycle hooks if `run_lifecycle_hooks` is True.   |  `""` |
+| <a id="npm_import-custom_postinstall"></a>custom_postinstall |  Custom string postinstall script to run on the installed npm package.<br><br>Runs after any existing lifecycle hooks if any are enabled.   |  `""` |
 | <a id="npm_import-npm_auth"></a>npm_auth |  Auth token to authenticate with npm. When using Bearer authentication.   |  `""` |
 | <a id="npm_import-npm_auth_basic"></a>npm_auth_basic |  Auth token to authenticate with npm. When using Basic authentication.<br><br>This is typically the base64 encoded string "username:password".   |  `""` |
 | <a id="npm_import-npm_auth_username"></a>npm_auth_username |  Auth username to authenticate with npm. When using Basic authentication.   |  `""` |
 | <a id="npm_import-npm_auth_password"></a>npm_auth_password |  Auth password to authenticate with npm. When using Basic authentication.   |  `""` |
 | <a id="npm_import-bins"></a>bins |  Dictionary of `node_modules/.bin` binary files to create mapped to their node entry points.<br><br>This is typically derived from the "bin" attribute in the package.json file of the npm package being linked.<br><br>For example:<br><br><pre><code>bins = {&#10;    "foo": "./foo.js",&#10;    "bar": "./bar.js",&#10;}</code></pre><br><br>In the future, this field may be automatically populated by npm_translate_lock from information in the pnpm lock file. That feature is currently blocked on https://github.com/pnpm/pnpm/issues/5131.   |  `{}` |
 | <a id="npm_import-dev"></a>dev |  Whether this npm package is a dev dependency   |  `False` |
-| <a id="npm_import-register_copy_directory_toolchains"></a>register_copy_directory_toolchains |  if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_copy_directory_toolchains()` is called if the toolchain is not already registered   |  `True` |
-| <a id="npm_import-register_copy_to_directory_toolchains"></a>register_copy_to_directory_toolchains |  if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_copy_to_directory_toolchains()` is called if the toolchain is not already registered   |  `True` |
-| <a id="npm_import-run_lifecycle_hooks"></a>run_lifecycle_hooks |  If True, runs `preinstall`, `install`, `postinstall` and 'prepare' lifecycle hooks declared in this package.<br><br>Deprecated. Use `lifecycle_hooks` instead.   |  `None` |
-| <a id="npm_import-lifecycle_hooks_no_sandbox"></a>lifecycle_hooks_no_sandbox |  If True, adds "no-sandbox" to `lifecycle_hooks_execution_requirements`.<br><br>Deprecated. Add "no-sandbox" to `lifecycle_hooks_execution_requirements` instead.   |  `None` |
 | <a id="npm_import-kwargs"></a>kwargs |  Internal use only   |  none |
 
 

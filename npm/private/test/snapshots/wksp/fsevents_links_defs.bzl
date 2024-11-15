@@ -13,10 +13,11 @@ load("@aspect_rules_js//npm/private:npm_package_internal.bzl", _npm_package_inte
 # Generated npm_package_store targets for npm package fsevents@2.3.2
 # buildifier: disable=function-docstring
 def npm_imported_package_store(name):
+    bazel_package = native.package_name()
     root_package = ""
-    is_root = native.package_name() == root_package
+    is_root = bazel_package == root_package
     if not is_root:
-        msg = "No store links in bazel package '%s' for npm package npm package fsevents@2.3.2. This is neither the root package nor a link package of this package." % native.package_name()
+        msg = "No store links in bazel package '%s' for npm package npm package fsevents@2.3.2. This is neither the root package nor a link package of this package." % bazel_package
         fail(msg)
     if not name.endswith("/fsevents"):
         msg = "name must end with one of '/fsevents' when linking the store in package 'fsevents'; recommended value is 'node_modules/fsevents'"
@@ -37,10 +38,6 @@ def npm_imported_package_store(name):
         version = "2.3.2",
         dev = True,
         tags = ["manual"],
-        use_declare_symlink = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
-            "//conditions:default": False,
-        }),
     )
 
     # post-lifecycle target with reference deps for use in terminal target with transitive closure
@@ -52,13 +49,9 @@ def npm_imported_package_store(name):
         dev = True,
         deps = ref_deps,
         tags = ["manual"],
-        use_declare_symlink = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
-            "//conditions:default": False,
-        }),
     )
 
-    # virtual store target with transitive closure of all npm package dependencies
+    # package store target with transitive closure of all npm package dependencies
     _npm_package_store(
         name = store_target_name,
         src = None if True else "@@npm__fsevents__2.3.2//:pkg",
@@ -68,10 +61,6 @@ def npm_imported_package_store(name):
         deps = deps,
         visibility = ["//visibility:public"],
         tags = ["manual"],
-        use_declare_symlink = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
-            "//conditions:default": False,
-        }),
     )
 
     # filegroup target that provides a single file which is
@@ -96,10 +85,6 @@ def npm_imported_package_store(name):
         dev = True,
         deps = ref_deps,
         tags = ["manual"],
-        use_declare_symlink = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
-            "//conditions:default": False,
-        }),
     )
 
     # terminal pre-lifecycle target for use in lifecycle build target below
@@ -110,10 +95,6 @@ def npm_imported_package_store(name):
         dev = True,
         deps = lc_deps,
         tags = ["manual"],
-        use_declare_symlink = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
-            "//conditions:default": False,
-        }),
     )
 
     # lifecycle build action
@@ -155,6 +136,7 @@ def npm_imported_package_store(name):
         mnemonic = "NpmLifecycleHook",
         progress_message = "Running lifecycle hooks on npm package fsevents@2.3.2",
         env = {},
+        use_default_shell_env = False,
     )
 
     # post-lifecycle npm_package
@@ -169,9 +151,10 @@ def npm_imported_package_store(name):
 # Generated npm_package_store and npm_link_package_store targets for npm package fsevents@2.3.2
 # buildifier: disable=function-docstring
 def npm_link_imported_package_store(name):
+    bazel_package = native.package_name()
     link_packages = {}
-    if native.package_name() in link_packages:
-        link_aliases = link_packages[native.package_name()]
+    if bazel_package in link_packages:
+        link_aliases = link_packages[bazel_package]
     else:
         link_aliases = ["fsevents"]
 
@@ -195,10 +178,6 @@ def npm_link_imported_package_store(name):
         src = "//:{}".format(store_target_name),
         visibility = ["//visibility:public"],
         tags = ["manual"],
-        use_declare_symlink = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
-            "//conditions:default": False,
-        }),
     )
 
     # filegroup target that provides a single file which is
@@ -219,17 +198,18 @@ def npm_link_imported_package(
         name = "node_modules",
         link = True,
         fail_if_no_link = True):
+    bazel_package = native.package_name()
     root_package = ""
     link_packages = {}
 
     if link_packages and link != None:
         fail("link attribute cannot be specified when link_packages are set")
 
-    is_link = (link == True) or (link == None and native.package_name() in link_packages)
-    is_root = native.package_name() == root_package
+    is_link = (link == True) or (link == None and bazel_package in link_packages)
+    is_root = bazel_package == root_package
 
     if fail_if_no_link and not is_root and not link:
-        msg = "Nothing to link in bazel package '%s' for npm package npm package fsevents@2.3.2. This is neither the root package nor a link package of this package." % native.package_name()
+        msg = "Nothing to link in bazel package '%s' for npm package npm package fsevents@2.3.2. This is neither the root package nor a link package of this package." % bazel_package
         fail(msg)
 
     link_targets = []
@@ -237,8 +217,8 @@ def npm_link_imported_package(
 
     if is_link:
         link_aliases = []
-        if native.package_name() in link_packages:
-            link_aliases = link_packages[native.package_name()]
+        if bazel_package in link_packages:
+            link_aliases = link_packages[bazel_package]
         if not link_aliases:
             link_aliases = ["fsevents"]
         for link_alias in link_aliases:
@@ -246,8 +226,8 @@ def npm_link_imported_package(
             npm_link_imported_package_store(name = link_target_name)
             if True:
                 link_targets.append(":{}".format(link_target_name))
-                if len(link_alias.split("/", 1)) > 1:
-                    link_scope = link_alias.split("/", 1)[0]
+                link_scope = link_alias[:link_alias.find("/", 1)] if link_alias[0] == "@" else None
+                if link_scope:
                     if link_scope not in scoped_targets:
                         scoped_targets[link_scope] = []
                     scoped_targets[link_scope].append(link_target_name)

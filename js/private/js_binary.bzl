@@ -15,14 +15,12 @@ js_binary(
 ```
 """
 
-load("@aspect_bazel_lib//lib:windows_utils.bzl", "create_windows_native_launcher_script")
-load("@aspect_bazel_lib//lib:expand_make_vars.bzl", "expand_locations", "expand_variables")
-load("@aspect_bazel_lib//lib:directory_path.bzl", "DirectoryPathInfo")
-load("@aspect_bazel_lib//lib:utils.bzl", "is_bazel_6_or_greater")
 load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "COPY_FILE_TO_BIN_TOOLCHAINS")
-load("@bazel_skylib//lib:dicts.bzl", "dicts")
-load(":js_helpers.bzl", "LOG_LEVELS", "envs_for_log_level", "gather_runfiles")
+load("@aspect_bazel_lib//lib:directory_path.bzl", "DirectoryPathInfo")
+load("@aspect_bazel_lib//lib:expand_make_vars.bzl", "expand_locations", "expand_variables")
+load("@aspect_bazel_lib//lib:windows_utils.bzl", "create_windows_native_launcher_script")
 load(":bash.bzl", "BASH_INITIALIZE_RUNFILES")
+load(":js_helpers.bzl", "LOG_LEVELS", "envs_for_log_level", "gather_runfiles")
 
 _DOC = """Execute a program in the Node.js runtime.
 
@@ -34,6 +32,10 @@ Bazel option to see more detail about the selection.
 
 All [common binary attributes](https://bazel.build/reference/be/common-definitions#common-attributes-binaries) are supported
 including `args` as the list of arguments passed Node.js.
+
+Node.js execution is performed by a shell script that sets environment variables and runs the Node.js binary with the `entry_point` script.
+The shell script is located relative to the directory containing the `js_binary` at `\\{name\\}_/\\{name\\}` similar to other rulesets
+such as rules_go. See [PR #1690](https://github.com/aspect-build/rules_js/pull/1690) for more information on this naming scheme.
 
 The following environment variables are made available to the Node.js runtime based on available Bazel [Make variables](https://bazel.build/reference/be/make-variables#predefined_variables):
 
@@ -124,15 +126,29 @@ _ATTRS = {
         doc = """Environment variables of the action.
 
         Subject to [$(location)](https://bazel.build/reference/be/make-variables#predefined_label_variables)
-        and ["Make variable"](https://bazel.build/reference/be/make-variables) substitution.
+        and ["Make variable"](https://bazel.build/reference/be/make-variables) substitution if `expand_env` is set to True.
         """,
+    ),
+    "expand_args": attr.bool(
+        default = True,
+        doc = """Enables [$(location)](https://bazel.build/reference/be/make-variables#predefined_label_variables)
+        and ["Make variable"](https://bazel.build/reference/be/make-variables) substitution for `fixed_args`.
+
+        This comes at some analysis-time cost even for a set of args that does not have any expansions.""",
+    ),
+    "expand_env": attr.bool(
+        default = True,
+        doc = """Enables [$(location)](https://bazel.build/reference/be/make-variables#predefined_label_variables)
+        and ["Make variable"](https://bazel.build/reference/be/make-variables) substitution for `env`.
+
+        This comes at some analysis-time cost even for a set of envs that does not have any expansions.""",
     ),
     "fixed_args": attr.string_list(
         doc = """Fixed command line arguments to pass to the Node.js when this
         binary target is executed.
 
         Subject to [$(location)](https://bazel.build/reference/be/make-variables#predefined_label_variables)
-        and ["Make variable"](https://bazel.build/reference/be/make-variables) substitution.
+        and ["Make variable"](https://bazel.build/reference/be/make-variables) substitution if `expand_args` is set to True.
 
         Unlike the built-in `args`, which are only passed to the target when it is
         executed either by the `bazel run` command or as a test, `fixed_args` are baked
@@ -188,21 +204,34 @@ _ATTRS = {
         which can lead to non-hermetic behavior.""",
         default = True,
     ),
-    "include_transitive_sources": attr.bool(
-        doc = """When True, `transitive_sources` from `JsInfo` providers in data targets are included in the runfiles of the target.""",
+    "include_sources": attr.bool(
+        doc = """When True, `sources` from `JsInfo` providers in `data` targets are included in the runfiles of the target.""",
         default = True,
     ),
-    "include_declarations": attr.bool(
-        doc = """When True, `declarations` and `transitive_declarations` from `JsInfo` providers in data targets are included in the runfiles of the target.
+    "include_transitive_sources": attr.bool(
+        doc = """When True, `transitive_sources` from `JsInfo` providers in `data` targets are included in the runfiles of the target.""",
+        default = True,
+    ),
+    "include_types": attr.bool(
+        doc = """When True, `types` from `JsInfo` providers in `data` targets are included in the runfiles of the target.
 
-        Defaults to false since declarations are generally not needed at runtime and introducing them could slow down developer round trip
+        Defaults to False since types are generally not needed at runtime and introducing them could slow down developer round trip
+        time due to having to generate typings on source file changes.
+
+        NB: These are types from direct `data` dependencies only. You may also need to set `include_transitive_types` to True.""",
+        default = False,
+    ),
+    "include_transitive_types": attr.bool(
+        doc = """When True, `transitive_types` from `JsInfo` providers in `data` targets are included in the runfiles of the target.
+
+        Defaults to False since types are generally not needed at runtime and introducing them could slow down developer round trip
         time due to having to generate typings on source file changes.""",
         default = False,
     ),
-    "include_npm_linked_packages": attr.bool(
-        doc = """When True, files in `npm_linked_packages` and `transitive_npm_linked_packages` from `JsInfo` providers in data targets are included in the runfiles of the target.
+    "include_npm_sources": attr.bool(
+        doc = """When True, files in `npm_sources` from `JsInfo` providers in `data` targets are included in the runfiles of the target.
 
-        `transitive_files` from `NpmPackageStoreInfo` providers in data targets are also included in the runfiles of the target.
+        `transitive_files` from `NpmPackageStoreInfo` providers in `data` targets are also included in the runfiles of the target.
         """,
         default = True,
     ),
@@ -257,23 +286,10 @@ _ATTRS = {
         to use npm.
         """,
     ),
-    "unresolved_symlinks_enabled": attr.bool(
-        doc = """Whether unresolved symlinks are enabled in the current build configuration.
-
-        These are enabled with the `--allow_unresolved_symlinks` flag
-        (named `--experimental_allow_unresolved_symlinks in Bazel versions prior to 7.0).
-
-        Typical usage of this rule is via a macro which automatically sets this
-        attribute based on a `config_setting` rule.
-        See /js/private/BUILD.bazel in rules_js for an example.
-        """,
-        # TODO(2.0): make this mandatory so that downstream binary rules that inherit these attributes are required to set it
-        mandatory = False,
-    ),
     "node_toolchain": attr.label(
         doc = """The Node.js toolchain to use for this target.
 
-        See https://bazelbuild.github.io/rules_nodejs/Toolchains.html
+        See https://bazel-contrib.github.io/rules_nodejs/Toolchains.html
 
         Typically this is left unset so that Bazel automatically selects the right Node.js toolchain
         for the target platform. See https://bazel.build/extending/toolchains#toolchain-resolution
@@ -301,21 +317,13 @@ _ATTRS = {
         allow_single_file = True,
     ),
     "_windows_constraint": attr.label(default = "@platforms//os:windows"),
-    "_node_patches_legacy_files": attr.label_list(
-        allow_files = True,
-        default = [Label("@aspect_rules_js//js/private/node-patches_legacy:fs.js")],
-    ),
-    "_node_patches_legacy": attr.label(
-        allow_single_file = True,
-        default = Label("@aspect_rules_js//js/private/node-patches_legacy:register.js"),
-    ),
     "_node_patches_files": attr.label_list(
         allow_files = True,
-        default = [Label("@aspect_rules_js//js/private/node-patches:fs.js")],
+        default = [Label("@aspect_rules_js//js/private/node-patches:fs.cjs")],
     ),
     "_node_patches": attr.label(
         allow_single_file = True,
-        default = Label("@aspect_rules_js//js/private/node-patches:register.js"),
+        default = Label("@aspect_rules_js//js/private/node-patches:register.cjs"),
     ),
 }
 
@@ -331,30 +339,24 @@ _NODE_OPTION = """JS_BINARY__NODE_OPTIONS+=(\"{value}\")"""
 def _deprecated_target_tool_path_to_short_path(tool_path):
     return ("../" + tool_path[len("external/"):]) if tool_path.startswith("external/") else tool_path
 
-# Generate a consistent label string between Bazel versions.
-# TODO(2.0): hoist this function to bazel-lib and use from there (as well as the dup in npm/private/utils.bzl)
-def _consistent_label_str(workspace_name, label):
-    # Starting in Bazel 6, the workspace name is empty for the local workspace and there's no other way to determine it.
-    # This behavior differs from Bazel 5 where the local workspace name was fully qualified in str(label).
-    workspace_name = "" if label.workspace_name == workspace_name else label.workspace_name
-    return "@{}//{}:{}".format(
-        workspace_name,
-        label.package,
-        label.name,
-    )
+def _expand_env_if_needed(ctx, value):
+    if ctx.attr.expand_env:
+        return " ".join([expand_variables(ctx, exp, attribute_name = "env") for exp in expand_locations(ctx, value, ctx.attr.data).split(" ")])
+    return value
 
-def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, fixed_env, is_windows, use_legacy_node_patches):
+def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, fixed_env, is_windows):
     # Explicitly disable node fs patches on Windows:
     # https://github.com/aspect-build/rules_js/issues/1137
     if is_windows:
         fixed_env = dict(fixed_env, **{"JS_BINARY__PATCH_NODE_FS": "0"})
 
-    envs = []
-    for (key, value) in dicts.add(fixed_env, ctx.attr.env).items():
-        envs.append(_ENV_SET.format(
-            var = key,
-            value = " ".join([expand_variables(ctx, exp, attribute_name = "env") for exp in expand_locations(ctx, value, ctx.attr.data).split(" ")]),
-        ))
+    envs = [
+        _ENV_SET.format(var = key, value = _expand_env_if_needed(ctx, value))
+        for key, value in fixed_env.items()
+    ] + [
+        _ENV_SET.format(var = key, value = _expand_env_if_needed(ctx, value))
+        for key, value in ctx.attr.env.items()
+    ]
 
     # Add common and useful make variables to the environment
     makevars = {
@@ -401,10 +403,7 @@ def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_pre
 
     if ctx.attr.chdir:
         # Set chdir env if not already set to allow js_run_binary to override
-        envs.append(_ENV_SET_IFF_NOT_SET.format(
-            var = "JS_BINARY__CHDIR",
-            value = " ".join([expand_variables(ctx, exp, attribute_name = "env") for exp in expand_locations(ctx, ctx.attr.chdir, ctx.attr.data).split(" ")]),
-        ))
+        envs.append(_ENV_SET_IFF_NOT_SET.format(var = "JS_BINARY__CHDIR", value = _expand_env_if_needed(ctx, ctx.attr.chdir)))
 
     # Set log envs iff not already set to allow js_run_binary to override
     for env in envs_for_log_level(ctx.attr.log_level):
@@ -412,13 +411,12 @@ def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_pre
 
     node_options = []
     for node_option in ctx.attr.node_options:
-        node_options.append(_NODE_OPTION.format(
-            value = " ".join([expand_variables(ctx, exp, attribute_name = "env") for exp in expand_locations(ctx, node_option, ctx.attr.data).split(" ")]),
-        ))
+        node_options.append(_NODE_OPTION.format(value = _expand_env_if_needed(ctx, node_option)))
     if ctx.attr.preserve_symlinks_main and "--preserve-symlinks-main" not in node_options:
         node_options.append(_NODE_OPTION.format(value = "--preserve-symlinks-main"))
 
-    fixed_args_expanded = [expand_variables(ctx, expand_locations(ctx, fixed_arg, ctx.attr.data)) for fixed_arg in fixed_args]
+    if ctx.attr.expand_args:
+        fixed_args = [expand_variables(ctx, expand_locations(ctx, fixed_arg, ctx.attr.data)) for fixed_arg in fixed_args]
 
     toolchain_files = []
     if is_windows:
@@ -471,24 +469,27 @@ def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_pre
         node_path = _deprecated_target_tool_path_to_short_path(nodeinfo.target_tool_path)
 
     launcher_subst = {
-        "{{target_label}}": _consistent_label_str(ctx.workspace_name, ctx.label),
-        "{{template_label}}": _consistent_label_str(ctx.workspace_name, ctx.attr._launcher_template.label),
-        "{{entry_point_label}}": _consistent_label_str(ctx.workspace_name, ctx.attr.entry_point.label),
+        "{{target_label}}": str(ctx.label),
+        "{{template_label}}": str(ctx.attr._launcher_template.label),
+        "{{entry_point_label}}": str(ctx.attr.entry_point.label),
         "{{entry_point_path}}": entry_point_path,
         "{{envs}}": "\n".join(envs),
-        "{{fixed_args}}": " ".join(fixed_args_expanded),
+        "{{fixed_args}}": " ".join(fixed_args),
         "{{initialize_runfiles}}": BASH_INITIALIZE_RUNFILES,
         "{{log_prefix_rule_set}}": log_prefix_rule_set,
         "{{log_prefix_rule}}": log_prefix_rule,
         "{{node_options}}": "\n".join(node_options),
-        "{{node_patches}}": ctx.file._node_patches_legacy.short_path if use_legacy_node_patches else ctx.file._node_patches.short_path,
+        "{{node_patches}}": ctx.file._node_patches.short_path,
         "{{node_wrapper}}": node_wrapper.short_path,
         "{{node}}": node_path,
         "{{npm}}": npm_path,
         "{{workspace_name}}": ctx.workspace_name,
     }
 
-    launcher = ctx.actions.declare_file("%s.sh" % ctx.label.name)
+    # The '_' avoids collisions with another file matching the label name.
+    # For example, test and test/my.spec.ts. This naming scheme is borrowed from rules_go:
+    # https://github.com/bazelbuild/rules_go/blob/f3cc8a2d670c7ccd5f45434ab226b25a76d44de1/go/private/context.bzl#L144
+    launcher = ctx.actions.declare_file("{}_/{}".format(ctx.label.name, ctx.label.name))
     ctx.actions.expand_template(
         template = ctx.file._launcher_template,
         output = launcher,
@@ -500,11 +501,6 @@ def _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_pre
 
 def _create_launcher(ctx, log_prefix_rule_set, log_prefix_rule, fixed_args = [], fixed_env = {}):
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
-    is_bazel_6 = is_bazel_6_or_greater()
-    unresolved_symlinks_enabled = False
-    if hasattr(ctx.attr, "unresolved_symlinks_enabled"):
-        unresolved_symlinks_enabled = ctx.attr.unresolved_symlinks_enabled
-    use_legacy_node_patches = not is_bazel_6 or not unresolved_symlinks_enabled
 
     if ctx.attr.node_toolchain:
         nodeinfo = ctx.attr.node_toolchain[platform_common.ToolchainInfo].nodeinfo
@@ -523,7 +519,7 @@ def _create_launcher(ctx, log_prefix_rule_set, log_prefix_rule, fixed_args = [],
         entry_point = ctx.files.entry_point[0]
         entry_point_path = entry_point.short_path
 
-    bash_launcher, toolchain_files = _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, fixed_env, is_windows, use_legacy_node_patches)
+    bash_launcher, toolchain_files = _bash_launcher(ctx, nodeinfo, entry_point_path, log_prefix_rule_set, log_prefix_rule, fixed_args, fixed_env, is_windows)
     launcher = create_windows_native_launcher_script(ctx, bash_launcher) if is_windows else bash_launcher
 
     launcher_files = [bash_launcher]
@@ -535,10 +531,7 @@ def _create_launcher(ctx, log_prefix_rule_set, log_prefix_rule, fixed_args = [],
         # TODO(3.0): drop support for deprecated toolchain attributes
         launcher_files.extend(nodeinfo.tool_files)
 
-    if use_legacy_node_patches:
-        launcher_files.extend(ctx.files._node_patches_legacy_files + [ctx.file._node_patches_legacy])
-    else:
-        launcher_files.extend(ctx.files._node_patches_files + [ctx.file._node_patches])
+    launcher_files.extend(ctx.files._node_patches_files + [ctx.file._node_patches])
     transitive_launcher_files = None
     if ctx.attr.include_npm:
         if hasattr(nodeinfo, "npm_sources"):
@@ -551,15 +544,15 @@ def _create_launcher(ctx, log_prefix_rule_set, log_prefix_rule, fixed_args = [],
 
     runfiles = gather_runfiles(
         ctx = ctx,
-        sources = [],
         data = ctx.attr.data,
         data_files = [entry_point] + ctx.files.data,
-        deps = [],
         copy_data_files_to_bin = ctx.attr.copy_data_to_bin,
         no_copy_to_bin = ctx.files.no_copy_to_bin,
+        include_sources = ctx.attr.include_sources,
+        include_types = ctx.attr.include_types,
         include_transitive_sources = ctx.attr.include_transitive_sources,
-        include_declarations = ctx.attr.include_declarations,
-        include_npm_linked_packages = ctx.attr.include_npm_linked_packages,
+        include_transitive_types = ctx.attr.include_transitive_types,
+        include_npm_sources = ctx.attr.include_npm_sources,
     ).merge(ctx.runfiles(
         files = launcher_files,
         transitive_files = transitive_launcher_files,

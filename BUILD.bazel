@@ -5,11 +5,11 @@ load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@npm//:defs.bzl", "npm_link_all_packages", "npm_link_targets")
 load("@pnpm__links//:defs.bzl", npm_link_pnpm = "npm_link_imported_package")
-load("//npm:defs.bzl", "npm_link_package")
 load("//js:defs.bzl", "js_library")
+load("//npm:defs.bzl", "npm_link_package")
 
 # Link all packages from the /WORKSPACE npm_translate_lock(name = "npm") and also packages from
-# manual /WORKSPACE npm_import rules to bazel-bin/node_modules as well as the virtual store
+# manual /WORKSPACE npm_import rules to bazel-bin/node_modules as well as the package store
 # bazel-bin/node_modules/.aspect_rules_js since /pnpm-lock.yaml is the root of the pnpm workspace
 npm_link_all_packages(
     name = "node_modules",
@@ -65,11 +65,11 @@ diff_test(
 )
 
 # Example of manually linking a first-party dependency. Its transitive npm dependencies
-# are picked up automatically via 'npm_package_store_deps' in the js_library targets that
+# are picked up automatically via 'npm_package_store_infos' in the js_library targets that
 # the `npm_package` target depends on.
 npm_link_package(
     name = "node_modules/@mycorp/pkg-b",
-    src = "//examples/npm_package/packages/pkg_b",
+    src = "//examples/npm_package/packages/pkg_b:pkg",
 )
 
 # Manually linked pkg-c with additional use cases.
@@ -95,18 +95,26 @@ gazelle(
 
 buildifier(
     name = "buildifier",
-    exclude_patterns = ["./.git/*"],
+    exclude_patterns = [
+        "./.git/*",
+        "**/snapshots/**",
+    ],
     lint_mode = "fix",
     lint_warnings = ["-out-of-order-load"],  # TODO: enable out-of-order-load
     mode = "fix",
+    tags = ["manual"],  # tag as manual so windows ci does not build it by default
 )
 
 buildifier(
     name = "buildifier.check",
-    exclude_patterns = ["./.git/*"],
+    exclude_patterns = [
+        "./.git/*",
+        "**/snapshots/**",
+    ],
     lint_mode = "warn",
     lint_warnings = ["-out-of-order-load"],  # TODO: enable out-of-order-load
     mode = "diff",
+    tags = ["manual"],  # tag as manual so windows ci does not build it by default
 )
 
 alias(

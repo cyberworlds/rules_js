@@ -1,42 +1,23 @@
-workspace(
-    # see https://docs.bazel.build/versions/main/skylark/deploying.html#workspace
-    name = "aspect_rules_js",
-)
+workspace(name = "aspect_rules_js")
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-# Override rules_nodejs to v6 to test the latest and recommended versional internally,
-# while keeping v5 in rules_js_dependencies() to avoid breaking changes.
-# TODO(2.0): change minimum to v6 in repositories.bzl
-http_archive(
-    name = "rules_nodejs",
-    sha256 = "dddd60acc3f2f30359bef502c9d788f67e33814b0ddd99aa27c5a15eb7a41b8c",
-    strip_prefix = "rules_nodejs-6.1.0",
-    url = "https://github.com/bazelbuild/rules_nodejs/releases/download/v6.1.0/rules_nodejs-v6.1.0.tar.gz",
-)
-
-load("//js:dev_repositories.bzl", "rules_js_dev_dependencies")
+# buildifier: disable=bzl-visibility
+load("//js/private:dev_deps.bzl", "rules_js_dev_dependencies")
 
 rules_js_dev_dependencies()
 
-load("//js:repositories.bzl", "rules_js_dependencies")
+load("@aspect_rules_js//js:repositories.bzl", "rules_js_dependencies")
 
 rules_js_dependencies()
 
-load("@aspect_bazel_lib//lib:repositories.bzl", "register_coreutils_toolchains", "register_expand_template_toolchains", "register_jq_toolchains")
+load("@aspect_rules_js//js:toolchains.bzl", "rules_js_register_toolchains")
 
-register_coreutils_toolchains()
+rules_js_register_toolchains(node_version = "16.14.2")
+
+load("@aspect_bazel_lib//lib:repositories.bzl", "register_expand_template_toolchains")
 
 register_expand_template_toolchains()
 
-register_jq_toolchains()
-
 load("@rules_nodejs//nodejs:repositories.bzl", "nodejs_register_toolchains")
-
-nodejs_register_toolchains(
-    name = "nodejs",
-    node_version = "16.14.2",
-)
 
 # Alternate toolchains for testing across versions
 nodejs_register_toolchains(
@@ -65,8 +46,8 @@ host_repo(name = "aspect_bazel_lib_host")
 ############################################
 # Gazelle, for generating bzl_library targets
 
-load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
 
 go_rules_dependencies()
 
@@ -97,12 +78,18 @@ npm_translate_lock(
         "//:package.json",
         "//:pnpm-workspace.yaml",
         "//examples/js_binary:package.json",
+        "//examples/linked_consumer:package.json",
         "//examples/linked_empty_node_modules:package.json",
+        "//examples/linked_lib:package.json",
+        "//examples/linked_pkg:package.json",
         "//examples/macro:package.json",
         "//examples/npm_deps:package.json",
         "//examples/npm_package/libs/lib_a:package.json",
         "//examples/npm_package/packages/pkg_a:package.json",
         "//examples/npm_package/packages/pkg_b:package.json",
+        "//examples/npm_package/packages/pkg_d:package.json",
+        "//examples/npm_package/packages/pkg_e:package.json",
+        "//examples/runfiles:package.json",
         "//examples/webpack_cli:package.json",
         "//js/private/coverage/bundle:package.json",
         "//js/private/image:package.json",
@@ -112,6 +99,7 @@ npm_translate_lock(
         "//npm/private/test:package.json",
         "//npm/private/test:vendored/lodash-4.17.21.tgz",
         "//npm/private/test/npm_package:package.json",
+        "//npm/private/test/npm_package_publish:package.json",
         "//npm/private/test/vendored/is-odd:package.json",
         "//npm/private/test/vendored/semver-max:package.json",
     ],
@@ -161,12 +149,6 @@ npm_translate_lock(
         "unused": ["//visibility:private"],
         "@mycorp/pkg-a": ["//examples:__subpackages__"],
     },
-    patch_args = {
-        "*": ["-p1"],
-    },
-    patches = {
-        "meaning-of-life@1.0.0": ["//examples/npm_deps:patches/meaning-of-life@1.0.0-after_pnpm.patch"],
-    },
     pnpm_lock = "//:pnpm-lock.yaml",
     # Use a version that's not vendored into rules_js by providing a (version, integrity) tuple.
     # curl --silent https://registry.npmjs.org/pnpm | jq '.versions["8.6.11"].dist.integrity'
@@ -177,9 +159,6 @@ npm_translate_lock(
         # to hoist it. This hoisted package can be referenced by the label `//examples/npm_deps:node_modules/ms` same as
         # other direct dependencies in the `examples/npm_deps/package.json`.
         "ms@2.1.3": ["examples/npm_deps"],
-    },
-    replace_packages = {
-        "chalk@5.0.1": "@chalk_501//:pkg",
     },
     update_pnpm_lock = True,
     verify_node_modules_ignored = "//:.bazelignore",
@@ -198,7 +177,7 @@ npm_import(
     bins = {"acorn": "./bin/acorn"},
     integrity = "sha512-ULr0LDaEqQrMFGyQ3bhJkLsbtrQ8QibAseGZeaSUiT/6zb9IvIkomWHJIvgvwad+hinRAgsI51JcWk2yvwyL+w==",
     package = "acorn",
-    # Root package where to link the virtual store
+    # Root package where to link the package store
     root_package = "",
     version = "8.4.0",
 )

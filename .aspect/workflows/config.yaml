@@ -5,11 +5,17 @@ workspaces:
         label: rules_js
         tasks:
             - test:
+                  bazel:
+                      flags:
+                          - --config=rbe
     e2e/bzlmod:
         icon: bazel
         tasks:
             - test:
                   queue: aspect-default
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -23,6 +29,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -39,6 +48,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-default
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -80,6 +92,25 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
+            - format:
+                  without: true
+            - buildifier:
+                  without: true
+            - configure:
+                  without: true
+            - delivery:
+                  without: true
+    e2e/npm_translate_lock_replace_packages:
+        icon: npm
+        tasks:
+            - test:
+                  queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -93,6 +124,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -188,6 +222,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -201,6 +238,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -214,6 +254,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -227,6 +270,25 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
+            - format:
+                  without: true
+            - buildifier:
+                  without: true
+            - configure:
+                  without: true
+            - delivery:
+                  without: true
+    e2e/runfiles:
+        icon: js
+        tasks:
+            - test:
+                  queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:
@@ -240,6 +302,9 @@ workspaces:
         tasks:
             - test:
                   queue: aspect-medium
+                  bazel:
+                      flags:
+                          - --config=rbe
             - format:
                   without: true
             - buildifier:

@@ -1,17 +1,17 @@
-load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_test")
 load("@aspect_bazel_lib//lib:diff_test.bzl", "diff_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_test")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 
 ###########################
 
+# Load from the "bin" property from the package.json of the uvu package
+load("@npm//examples/npm_deps:uvu/package_json.bzl", uvu_bin = "bin")
+
 # Directly load from rollup's bin entries, skipping the "bin" helper from package_json.bzl
 # Just to show what the syntax de-sugaring looks like, and to test that
 # bare `npm_import` produces working binaries.
 load("@npm__rollup__2.70.2//examples/npm_deps:package_json.bzl", "rollup", "rollup_binary", "rollup_test")
-
-# Load from the "bin" property from the package.json of the uvu package
-load("@npm//examples/npm_deps:uvu/package_json.bzl", uvu_bin = "bin")
 
 ###########################
 
@@ -237,7 +237,7 @@ js_test(
 )
 
 #######################################
-# Case 7: use a first-party npm package from within our Bazel monorepo workspace
+# Case 7: use a first-party npm package within our Bazel monorepo workspace from an npm_package target
 
 write_file(
     name = "write7",
@@ -261,4 +261,38 @@ js_test(
         ":node_modules/meaning-of-life",
     ],
     entry_point = "patched-dependencies-test.js",
+)
+
+#######################################
+# Case 9: use a first-party npm package within our Bazel monorepo workspace from a js_library target
+
+write_file(
+    name = "write9",
+    out = "case9.js",
+    content = ["require('@mycorp/pkg-d')"],
+)
+
+js_test(
+    name = "test9",
+    data = [
+        ":node_modules/@mycorp/pkg-d",
+    ],
+    entry_point = "case9.js",
+)
+
+#######################################
+# Case 10: use a first-party npm package a transitive dependency on a monorepo workspace from a js_library target
+
+write_file(
+    name = "write10",
+    out = "case10.js",
+    content = ["require('@mycorp/pkg-e')"],
+)
+
+js_test(
+    name = "test10",
+    data = [
+        ":node_modules/@mycorp/pkg-e",
+    ],
+    entry_point = "case10.js",
 )

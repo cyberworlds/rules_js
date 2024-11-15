@@ -19,11 +19,13 @@ def _custom_test_impl(ctx):
 
     runfiles = ctx.runfiles(
         files = ctx.files.data,
-        transitive_files = js_lib_helpers.gather_files_from_js_providers(
+        transitive_files = js_lib_helpers.gather_files_from_js_infos(
             targets = ctx.attr.data,
+            include_sources = ctx.attr.include_sources,
+            include_types = ctx.attr.include_types,
             include_transitive_sources = ctx.attr.include_transitive_sources,
-            include_declarations = ctx.attr.include_declarations,
-            include_npm_linked_packages = ctx.attr.include_npm_linked_packages,
+            include_transitive_types = ctx.attr.include_transitive_types,
+            include_npm_sources = ctx.attr.include_npm_sources,
         ),
     ).merge(launcher.runfiles).merge_all([
         target[DefaultInfo].default_runfiles
@@ -47,11 +49,7 @@ _custom_test = rule(
 def custom_test(**kwargs):
     _custom_test(
         enable_runfiles = select({
-            Label("@aspect_rules_js//js:enable_runfiles"): True,
-            "//conditions:default": False,
-        }),
-        unresolved_symlinks_enabled = select({
-            Label("@aspect_rules_js//js:allow_unresolved_symlinks"): True,
+            Label("@aspect_bazel_lib//lib:enable_runfiles"): True,
             "//conditions:default": False,
         }),
         **kwargs

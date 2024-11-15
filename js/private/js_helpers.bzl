@@ -2,124 +2,60 @@
 """
 
 load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_file_to_bin_action")
-load("//npm:providers.bzl", "NpmPackageStoreInfo")
 load(":js_info.bzl", "JsInfo")
-
-DOWNSTREAM_LINKED_NPM_DEPS_DOCSTRING = """If this list contains linked npm packages, npm package store targets or other targets that provide
-`JsInfo`, `NpmPackageStoreInfo` providers are gathered from `JsInfo`. This is done directly from
-the `npm_package_store_deps` field of these. For linked npm package targets, the underlying
-`npm_package_store` target(s) that back the links is used. Gathered `NpmPackageStoreInfo`
-providers are propagated to the direct dependencies of downstream linked `npm_package` targets.
-
-NB: Linked npm package targets that are "dev" dependencies do not forward their underlying
-`npm_package_store` target(s) through `npm_package_store_deps` and will therefore not be
-propagated to the direct dependencies of downstream linked `npm_package` targets. npm packages
-that come in from `npm_translate_lock` are considered "dev" dependencies if they are have
-`dev: true` set in the pnpm lock file. This should be all packages that are only listed as
-"devDependencies" in all `package.json` files within the pnpm workspace. This behavior is
-intentional to mimic how `devDependencies` work in published npm packages.
-"""
-
-# This attribute is exposed in //js:libs.bzl so that downstream build rules can use it
-JS_LIBRARY_DATA_ATTR = attr.label_list(
-    doc = """Runtime dependencies to include in binaries/tests that depend on this target.
-
-The transitive npm dependencies, transitive sources, default outputs and runfiles of targets in the `data` attribute
-are added to the runfiles of this target. They should appear in the '*.runfiles' area of any executable which has
-a runtime dependency on this target.
-
-{downstream_linked_npm_deps}
-""".format(
-        downstream_linked_npm_deps = DOWNSTREAM_LINKED_NPM_DEPS_DOCSTRING,
-    ),
-    allow_files = True,
-)
 
 def gather_transitive_sources(sources, targets):
     """Gathers transitive sources from a list of direct sources and targets
 
     Args:
-        sources: list or depset of direct sources which should be included in `transitive_sources`
+        sources: list of direct sources which should be included in `transitive_sources`
         targets: list of targets to gather `transitive_sources` from `JsInfo`
 
     Returns:
         A depset of transitive sources
     """
-    if type(sources) == "list":
-        sources = depset(sources)
     transitive = [
         target[JsInfo].transitive_sources
         for target in targets
-        if JsInfo in target and hasattr(target[JsInfo], "transitive_sources")
+        if JsInfo in target
     ]
-    return depset([], transitive = [sources] + transitive)
+    return depset(sources, transitive = transitive)
 
-def gather_transitive_declarations(declarations, targets):
-    """Gathers transitive declarations from a list of direct declarations and targets
+def gather_transitive_types(types, targets):
+    """Gathers transitive types from a list of direct types and targets
 
     Args:
-        declarations: list or depset of direct sources which should be included in `transitive_declarations`
-        targets: list of targets to gather `transitive_declarations` from `JsInfo`
+        types: list of direct sources which should be included in `transitive_types`
+        targets: list of targets to gather `transitive_types` from `JsInfo`
 
     Returns:
         A depset of transitive sources
     """
-    if type(declarations) == "list":
-        declarations = depset(declarations)
     transitive = [
-        target[JsInfo].transitive_declarations
+        target[JsInfo].transitive_types
         for target in targets
-        if JsInfo in target and hasattr(target[JsInfo], "transitive_declarations")
+        if JsInfo in target
     ]
-    return depset([], transitive = [declarations] + transitive)
+    return depset(types, transitive = transitive)
 
-def gather_npm_linked_packages(srcs, deps):
-    """Gathers npm linked packages from a list of srcs and deps targets
+def gather_npm_sources(srcs, deps):
+    """Gathers npm sources from a list of srcs and deps targets
 
     Args:
         srcs: source targets; these typically come from the `srcs` and/or `data` attributes of a rule
         deps: dep targets; these typically come from the `deps` attribute of a rule
 
     Returns:
-        A `struct(direct, direct_files, transitive, transitive_files)` of direct and transitive npm linked packages & underlying files gathered
+        Depset of npm sources
     """
 
-    # npm_linked_packages
-    npm_linked_packages = [
-        target[JsInfo].npm_linked_packages
-        for target in srcs
-        if JsInfo in target and hasattr(target[JsInfo], "npm_linked_packages")
-    ]
-
-    # npm_linked_package_files
-    npm_linked_package_files = [
-        target[JsInfo].npm_linked_package_files
-        for target in srcs
-        if JsInfo in target and hasattr(target[JsInfo], "npm_linked_package_files")
-    ]
-
-    # transitive_npm_linked_packages
-    transitive_npm_linked_packages = depset([], transitive = npm_linked_packages + [
-        target[JsInfo].transitive_npm_linked_packages
+    return depset(transitive = [
+        target[JsInfo].npm_sources
         for target in srcs + deps
-        if JsInfo in target and hasattr(target[JsInfo], "transitive_npm_linked_packages")
+        if JsInfo in target
     ])
 
-    # transitive_npm_linked_package_files
-    transitive_npm_linked_package_files = depset([], transitive = npm_linked_package_files + [
-        target[JsInfo].transitive_npm_linked_package_files
-        for target in srcs + deps
-        if JsInfo in target and hasattr(target[JsInfo], "transitive_npm_linked_package_files")
-    ])
-
-    return struct(
-        direct = depset([], transitive = npm_linked_packages),
-        direct_files = depset([], transitive = npm_linked_package_files),
-        transitive = transitive_npm_linked_packages,
-        transitive_files = transitive_npm_linked_package_files,
-    )
-
-def gather_npm_package_store_deps(targets):
+def gather_npm_package_store_infos(targets):
     """Gathers NpmPackageStoreInfo providers from the list of targets
 
     Args:
@@ -129,14 +65,14 @@ def gather_npm_package_store_deps(targets):
         A depset of npm package stores gathered
     """
 
-    # npm_package_store_deps
-    npm_package_store_deps = [
-        target[JsInfo].npm_package_store_deps
+    # npm_package_store_infos
+    npm_package_store_infos = [
+        target[JsInfo].npm_package_store_infos
         for target in targets
         if JsInfo in target
     ]
 
-    return depset([], transitive = npm_package_store_deps)
+    return depset(transitive = npm_package_store_infos)
 
 def copy_js_file_to_bin_action(ctx, file):
     if ctx.label.workspace_name != file.owner.workspace_name or ctx.label.package != file.owner.package:
@@ -174,19 +110,31 @@ this option is not needed.
 
     return copy_file_to_bin_action(ctx, file)
 
-def gather_runfiles(ctx, sources, data, deps, data_files = [], copy_data_files_to_bin = False, no_copy_to_bin = [], include_transitive_sources = True, include_declarations = False, include_npm_linked_packages = True):
+def gather_runfiles(
+        ctx,
+        sources = None,
+        data = [],
+        deps = [],
+        data_files = [],
+        copy_data_files_to_bin = False,
+        no_copy_to_bin = [],
+        include_sources = True,
+        include_types = False,
+        include_transitive_sources = True,
+        include_transitive_types = False,
+        include_npm_sources = True):
     """Creates a runfiles object containing files in `sources`, default outputs from `data` and transitive runfiles from `data` & `deps`.
 
     As a defense in depth against `data` & `deps` targets not supplying all required runfiles, also
-    gathers the transitive sources & transitive npm linked packages from the `JsInfo` &
-    `NpmPackageStoreInfo` providers of `data` & `deps` targets.
+    gathers the transitive sources & transitive npm sources from the `JsInfo` providers of
+    `data` & `deps` targets.
 
     See https://bazel.build/extending/rules#runfiles for more info on providing runfiles in build rules.
 
     Args:
         ctx: the rule context
 
-        sources: list or depset of files which should be included in runfiles
+        sources: depset which should be included in runfiles
 
         deps: list of dependency targets; only transitive runfiles are gather from these targets
 
@@ -210,45 +158,52 @@ def gather_runfiles(ctx, sources, data, deps, data_files = [], copy_data_files_t
             file such as a file in an external repository. In most cases, this option is not needed.
             See `copy_data_files_to_bin` docstring for more info.
 
-        include_transitive_sources: see js_filegroup documentation
+        include_sources: see js_info_files documentation
 
-        include_declarations: see js_filegroup documentation
+        include_types: see js_info_files documentation
 
-        include_npm_linked_packages: see js_filegroup documentation
+        include_transitive_sources: see js_info_files documentation
+
+        include_transitive_types: see js_info_files documentation
+
+        include_npm_sources: see js_info_files documentation
 
     Returns:
         A [runfiles](https://bazel.build/rules/lib/runfiles) object created with [ctx.runfiles](https://bazel.build/rules/lib/ctx#runfiles).
     """
 
+    transitive_files_depsets = []
+
     # Includes sources
-    if type(sources) == "list":
-        sources = depset(sources)
-    transitive_files_depsets = [sources]
+    if sources:
+        transitive_files_depsets.append(sources)
 
     # Gather the default outputs of data targets
-    transitive_files_depsets.extend([
-        target[DefaultInfo].files
-        for target in data
-    ])
+    for target in data:
+        transitive_files_depsets.append(target[DefaultInfo].files)
 
-    # Gather the transitive sources & transitive npm linked packages from the JsInfo &
-    # NpmPackageStoreInfo providers of data & deps targets.
-    transitive_files_depsets.append(gather_files_from_js_providers(
-        targets = data + deps,
+    data_deps = data + deps
+
+    # Gather files from JsInfo providers of data & deps
+    transitive_files_depsets.append(gather_files_from_js_infos(
+        targets = data_deps,
+        include_sources = include_sources,
+        include_types = include_types,
         include_transitive_sources = include_transitive_sources,
-        include_declarations = include_declarations,
-        include_npm_linked_packages = include_npm_linked_packages,
+        include_transitive_types = include_transitive_types,
+        include_npm_sources = include_npm_sources,
     ))
 
-    files_runfiles = []
-    for d in data_files:
-        if copy_data_files_to_bin and d.is_source and d not in no_copy_to_bin:
-            files_runfiles.append(copy_js_file_to_bin_action(ctx, d))
-        else:
-            files_runfiles.append(d)
-
-    if len(files_runfiles) > 0:
-        transitive_files_depsets.append(depset(files_runfiles))
+    # Use `data_files` as-is if `copy_data_files_to_bin` is False
+    if copy_data_files_to_bin:
+        files_runfiles = []
+        for d in data_files:
+            if d.is_source and d not in no_copy_to_bin:
+                files_runfiles.append(copy_js_file_to_bin_action(ctx, d))
+            else:
+                files_runfiles.append(d)
+    else:
+        files_runfiles = data_files
 
     # Merge the above with the transitive runfiles of data & deps.
     return ctx.runfiles(
@@ -256,7 +211,7 @@ def gather_runfiles(ctx, sources, data, deps, data_files = [], copy_data_files_t
         transitive_files = depset(transitive = transitive_files_depsets),
     ).merge_all([
         target[DefaultInfo].default_runfiles
-        for target in data + deps
+        for target in data_deps
     ])
 
 LOG_LEVELS = {
@@ -294,48 +249,43 @@ def envs_for_log_level(log_level):
         envs.append("JS_BINARY__LOG_DEBUG")
     return envs
 
-def gather_files_from_js_providers(
+def gather_files_from_js_infos(
         targets,
+        include_sources,
+        include_types,
         include_transitive_sources,
-        include_declarations,
-        include_npm_linked_packages):
-    """Gathers files from JsInfo and NpmPackageStoreInfo providers.
+        include_transitive_types,
+        include_npm_sources):
+    """Gathers files from JsInfo providers.
 
     Args:
         targets: list of target to gather from
-        include_transitive_sources: see js_filegroup documentation
-        include_declarations: see js_filegroup documentation
-        include_npm_linked_packages: see js_filegroup documentation
+        include_sources: see js_info_files documentation
+        include_types: see js_info_files documentation
+        include_transitive_sources: see js_info_files documentation
+        include_transitive_types: see js_info_files documentation
+        include_npm_sources: see js_info_files documentation
 
     Returns:
         A depset of files
     """
-    files_depsets = [
-        target[JsInfo].sources
-        for target in targets
-        if JsInfo in target and hasattr(target[JsInfo], "sources")
-    ]
-    if include_transitive_sources:
-        files_depsets.extend([
-            target[JsInfo].transitive_sources
-            for target in targets
-            if JsInfo in target and hasattr(target[JsInfo], "transitive_sources")
-        ])
-    if include_declarations:
-        files_depsets.extend([
-            target[JsInfo].transitive_declarations
-            for target in targets
-            if JsInfo in target and hasattr(target[JsInfo], "transitive_declarations")
-        ])
-    if include_npm_linked_packages:
-        files_depsets.extend([
-            target[JsInfo].transitive_npm_linked_package_files
-            for target in targets
-            if JsInfo in target and hasattr(target[JsInfo], "transitive_npm_linked_package_files")
-        ])
-        files_depsets.extend([
-            target[NpmPackageStoreInfo].transitive_files
-            for target in targets
-            if NpmPackageStoreInfo in target and hasattr(target[NpmPackageStoreInfo], "transitive_files")
-        ])
-    return depset([], transitive = files_depsets)
+    files_depsets = []
+
+    for target in targets:
+        if JsInfo in target:
+            js_info = target[JsInfo]
+
+            if include_transitive_sources:
+                files_depsets.append(js_info.transitive_sources)
+            elif include_sources:
+                files_depsets.append(js_info.sources)
+
+            if include_transitive_types:
+                files_depsets.append(js_info.transitive_types)
+            elif include_types:
+                files_depsets.append(js_info.types)
+
+            if include_npm_sources:
+                files_depsets.append(js_info.npm_sources)
+
+    return depset(transitive = files_depsets)

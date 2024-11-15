@@ -236,7 +236,7 @@ def _select_npm_auth(url, npm_auth):
     return npm_auth_bearer, npm_auth_basic, npm_auth_username, npm_auth_password
 
 ################################################################################
-def _get_npm_imports(importers, packages, patched_dependencies, root_package, rctx_name, attr, all_lifecycle_hooks, all_lifecycle_hooks_execution_requirements, all_lifecycle_hooks_use_default_shell_env, registries, default_registry, npm_auth):
+def _get_npm_imports(importers, packages, patched_dependencies, only_built_dependencies, root_package, rctx_name, attr, all_lifecycle_hooks, all_lifecycle_hooks_execution_requirements, all_lifecycle_hooks_use_default_shell_env, registries, default_registry, npm_auth):
     "Converts packages from the lockfile to a struct of attributes for npm_import"
     if attr.prod and attr.dev:
         fail("prod and dev attributes cannot both be set to true")
@@ -255,10 +255,11 @@ def _get_npm_imports(importers, packages, patched_dependencies, root_package, rc
         for dep_package, dep_version in dependencies.items():
             if dep_version.startswith("link:"):
                 continue
-            if dep_version[0].isdigit():
-                maybe_package = utils.pnpm_name(dep_package, dep_version)
-            elif dep_version.startswith("/"):
-                maybe_package = dep_version[1:]
+            if dep_version.startswith("npm:"):
+                # special case for alias dependencies such as npm:alias-to@version
+                maybe_package = dep_version[4:]
+            elif dep_version not in packages:
+                maybe_package = utils.package_key(dep_package, dep_version)
             else:
                 maybe_package = dep_version
             if maybe_package not in linked_packages:
@@ -269,8 +270,8 @@ def _get_npm_imports(importers, packages, patched_dependencies, root_package, rc
         importer_links[import_path] = links
 
     patches_used = []
-    result = []
-    for package, package_info in packages.items():
+    result = {}
+    for package_key, package_info in packages.items():
         name = package_info.get("name")
         version = package_info.get("version")
         friendly_version = package_info.get("friendly_version")
@@ -278,7 +279,6 @@ def _get_npm_imports(importers, packages, patched_dependencies, root_package, rc
         optional_deps = package_info.get("optional_dependencies")
         dev = package_info.get("dev")
         optional = package_info.get("optional")
-        pnpm_patched = package_info.get("patched")
         requires_build = package_info.get("requires_build")
         transitive_closure = package_info.get("transitive_closure")
         resolution = package_info.get("resolution")
@@ -300,10 +300,10 @@ def _get_npm_imports(importers, packages, patched_dependencies, root_package, rc
 
         if resolution_type == "git":
             if not repo or not commit:
-                msg = "expected package {} resolution to have repo and commit fields when resolution type is git".format(package)
+                msg = "expected package {} resolution to have repo and commit fields when resolution type is git".format(package_key)
                 fail(msg)
         elif not integrity and not tarball:
-            msg = "expected package {} resolution to have an integrity or tarball field but found none".format(package)
+            msg = "expected package {} resolution to have an integrity or tarball field but found none".format(package_key)
             fail(msg)
 
         if attr.prod and dev:
@@ -326,12 +326,33 @@ def _get_npm_imports(importers, packages, patched_dependencies, root_package, rc
             unfriendly_name = None
 
         # gather patches & patch args
-        patches, patches_keys = _gather_values_from_matching_names(True, attr.patches, name, friendly_name, unfriendly_name)
+        patches = []
+        patch_args = []
+
+        translate_patches, patches_keys = _gather_values_from_matching_names(True, attr.patches, name, friendly_name, unfriendly_name)
+
+        pnpm_patch = patched_dependencies.get(friendly_name, {}).get("path", None)
+        pnpm_patched = pnpm_patch != None
+
+        if len(translate_patches) > 0 and pnpm_patched:
+            msg = """\
+ERROR: can not apply both `pnpm.patchedDependencies` and `npm_translate_lock(patches)` to the same package {pkg}.
+""".format(
+                pkg = name,
+            )
+            fail(msg)
 
         # Apply patch from `pnpm.patchedDependencies` first
         if pnpm_patched:
-            patch_path = "//%s:%s" % (attr.pnpm_lock.package, patched_dependencies.get(friendly_name).get("path"))
-            patches.insert(0, patch_path)
+            patch_path = "//%s:%s" % (attr.pnpm_lock.package, pnpm_patch)
+            patches.append(patch_path)
+
+            # pnpm patches are always applied with -p1
+            patch_args = ["-p1"]
+        elif len(translate_patches) > 0:
+            patches = translate_patches
+            patch_args, _ = _gather_values_from_matching_names(False, attr.patch_args, "*", name, friendly_name, unfriendly_name)
+            patches_used.extend(patches_keys)
 
         # Resolve string patch labels relative to the root respository rather than relative to rules_js.
         # https://docs.google.com/document/d/1N81qfCa8oskCk5LqTW-LNthy6EBrDot7bdUsjz6JFC4/
@@ -340,25 +361,6 @@ def _get_npm_imports(importers, packages, patched_dependencies, root_package, rc
         # Prepend the optional '@' to patch labels in the root repository for earlier versions of Bazel so
         # that checked in repositories.bzl files don't fail diff tests when run under multiple versions of Bazel.
         patches = [("@" if patch.startswith("//") else "") + patch for patch in patches]
-
-        patch_args, _ = _gather_values_from_matching_names(False, attr.patch_args, "*", name, friendly_name, unfriendly_name)
-
-        # Patches in `pnpm.patchedDependencies` must have the -p1 format. Therefore any
-        # patches applied via `patches` must also use -p1 since we don't support different
-        # patch args for different patches.
-        if pnpm_patched and not _has_strip_prefix_arg(patch_args, 1):
-            if _has_strip_prefix_arg(patch_args):
-                msg = """\
-ERROR: patch_args for package {package} contains a strip prefix that is incompatible with a patch applied via `pnpm.patchedDependencies`.
-
-`pnpm.patchedDependencies` requires a strip prefix of `-p1`. All applied patches must use the same strip prefix.
-
-""".format(package = friendly_name)
-                fail(msg)
-            patch_args = patch_args[:]
-            patch_args.append("-p1")
-
-        patches_used.extend(patches_keys)
 
         # gather replace packages
         replace_packages, _ = _gather_values_from_matching_names(True, attr.replace_packages, name, friendly_name, unfriendly_name)
@@ -382,7 +384,7 @@ ERROR: patch_args for package {package} contains a strip prefix that is incompat
         link_packages = {}
         for import_path, links in importer_links.items():
             linked_packages = links["packages"]
-            link_names = linked_packages.get(package, [])
+            link_names = linked_packages.get(package_key, [])
             if link_names:
                 link_packages[links["link_package"]] = link_names
 
@@ -394,7 +396,8 @@ ERROR: patch_args for package {package} contains a strip prefix that is incompat
             elif name not in link_packages[public_hoist_package]:
                 link_packages[public_hoist_package].append(name)
 
-        if requires_build:
+        run_lifecycle_hooks = name in only_built_dependencies if only_built_dependencies != None else requires_build
+        if run_lifecycle_hooks:
             lifecycle_hooks, _ = _gather_values_from_matching_names(False, all_lifecycle_hooks, "*", name, friendly_name, unfriendly_name)
             lifecycle_hooks_env, _ = _gather_values_from_matching_names(True, attr.lifecycle_hooks_envs, "*", name, friendly_name, unfriendly_name)
             lifecycle_hooks_execution_requirements, _ = _gather_values_from_matching_names(False, all_lifecycle_hooks_execution_requirements, "*", name, friendly_name, unfriendly_name)
@@ -438,7 +441,7 @@ ERROR: patch_args for package {package} contains a strip prefix that is incompat
 
         npm_auth_bearer, npm_auth_basic, npm_auth_username, npm_auth_password = _select_npm_auth(url, npm_auth)
 
-        result.append(struct(
+        result_pkg = struct(
             custom_postinstall = custom_postinstall,
             deps = deps,
             integrity = integrity,
@@ -452,7 +455,7 @@ ERROR: patch_args for package {package} contains a strip prefix that is incompat
             lifecycle_hooks = lifecycle_hooks,
             lifecycle_hooks_env = lifecycle_hooks_env,
             lifecycle_hooks_execution_requirements = lifecycle_hooks_execution_requirements,
-            lifecycle_hooks_use_default_shell_env = lifecycle_hooks_use_default_shell_env[0] == "true" if lifecycle_hooks else False,
+            lifecycle_hooks_use_default_shell_env = lifecycle_hooks_use_default_shell_env and lifecycle_hooks_use_default_shell_env[0] == "true",
             npm_auth = npm_auth_bearer,
             npm_auth_basic = npm_auth_basic,
             npm_auth_username = npm_auth_username,
@@ -465,7 +468,15 @@ ERROR: patch_args for package {package} contains a strip prefix that is incompat
             package_info = package_info,
             dev = dev,
             replace_package = replace_package,
-        ))
+        )
+
+        if repo_name in result:
+            msg = "ERROR: duplicate package name: {}\n\t1: {}\n\t2: {}".format(repo_name, result[repo_name], result_pkg)
+            fail(msg)
+
+        result[repo_name] = result_pkg
+
+    result = utils.sorted_map(result).values()
 
     # Check that all patches files specified were used; this is a defense-in-depth since it is too
     # easy to make a type in the patches keys or for a dep to change both of with could result
@@ -504,17 +515,9 @@ def _is_url(url):
     return url.find("://") != -1
 
 ################################################################################
-def _has_strip_prefix_arg(patch_args, strip_num = None):
-    if strip_num != None:
-        return "-p%d" % strip_num in patch_args or "--strip=%d" % strip_num in patch_args
-    for arg in patch_args:
-        if arg.startswith("-p") or arg.startswith("--strip="):
-            return True
-    return False
-
-################################################################################
 def _to_apparent_repo_name(canonical_name):
-    return canonical_name[canonical_name.rfind("~") + 1:]
+    # Bazel 7 uses `~` as the canonical name separator by default, Bazel 8 always uses `+`.
+    return canonical_name[max(canonical_name.rfind("~"), canonical_name.rfind("+")) + 1:]
 
 ################################################################################
 def _verify_node_modules_ignored(rctx, importers, root_package):
@@ -572,6 +575,34 @@ def _normalize_bazelignore(lines):
     return result
 
 ################################################################################
+def _verify_lifecycle_hooks_specified(_, state):
+    # lockfiles <9.0 specify the `requiresBuild` flag in the lockfile.
+    #
+    # lockfiles >=9.0 no longer specify if packages have lifecycle hooks,
+    # and declaration of hooks must be done manually in the `pnpm.onlyBuiltDependencies`.
+    if state.lockfile_version() < 9.0:
+        return
+
+    if state.only_built_dependencies() == None:
+        fail("""\
+ERROR: pnpm.onlyBuiltDependencies required in pnpm workspace root package.json when using pnpm v9 or later
+
+The root package.json must be alongside the pnpm-lock.yaml file and contain a pnpm.onlyBuiltDependencies and
+will be automatically detected even if not explicitly added to data attribute.
+
+As of pnpm v9, the lockfile no longer specifies if packages have lifecycle hooks.
+
+Packages that rules_js should generate lifecycle hook actions for must now be declared in
+pnpm.onlyBuiltDependencies in the pnpm workspace root package.json. See
+https://pnpm.io/package_json#pnpmonlybuiltdependencies for more information.
+
+Prior to pnpm v9, rules_js keyed off of the requiresBuild attribute in the pnpm lock
+file to determine if a lifecycle hook action should be generated for an npm package.
+See [pnpm #7707](https://github.com/pnpm/pnpm/issues/7707) for the reasons that pnpm
+removed the requiresBuild attribute from the lockfile in v9.
+""")
+
+################################################################################
 def _verify_patches(rctx, state):
     if rctx.attr.verify_patches and rctx.attr.patches != None:
         rctx.report_progress("Verifying patches in {}".format(state.label_store.relative_path("verify_patches")))
@@ -605,6 +636,7 @@ helpers = struct(
     link_package = _link_package,
     to_apparent_repo_name = _to_apparent_repo_name,
     verify_node_modules_ignored = _verify_node_modules_ignored,
+    verify_lifecycle_hooks_specified = _verify_lifecycle_hooks_specified,
     verify_patches = _verify_patches,
 )
 

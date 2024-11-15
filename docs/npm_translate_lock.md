@@ -11,7 +11,7 @@ load("@aspect_rules_js//npm:repositories.bzl", "npm_translate_lock")
 These use Bazel's downloader to fetch the packages.
 You can use this to redirect all fetches through a store like Artifactory.
 
-See <https://blog.aspect.dev/configuring-bazels-downloader> for more info about how it works
+See <https://blog.aspect.build/configuring-bazels-downloader> for more info about how it works
 and how to configure it.
 
 [`npm_translate_lock`](#npm_translate_lock) is the primary user-facing API.
@@ -31,6 +31,8 @@ Advanced users may want to directly fetch a package from npm rather than start f
 ## list_patches
 
 <pre>
+load("@aspect_rules_js//npm/private:npm_translate_lock.bzl", "list_patches")
+
 list_patches(<a href="#list_patches-name">name</a>, <a href="#list_patches-out">out</a>, <a href="#list_patches-include_patterns">include_patterns</a>, <a href="#list_patches-exclude_patterns">exclude_patterns</a>)
 </pre>
 
@@ -57,6 +59,8 @@ file stays up to date.
 ## npm_translate_lock
 
 <pre>
+load("@aspect_rules_js//npm/private:npm_translate_lock.bzl", "npm_translate_lock")
+
 npm_translate_lock(<a href="#npm_translate_lock-name">name</a>, <a href="#npm_translate_lock-pnpm_lock">pnpm_lock</a>, <a href="#npm_translate_lock-npm_package_lock">npm_package_lock</a>, <a href="#npm_translate_lock-yarn_lock">yarn_lock</a>, <a href="#npm_translate_lock-update_pnpm_lock">update_pnpm_lock</a>,
                    <a href="#npm_translate_lock-node_toolchain_prefix">node_toolchain_prefix</a>, <a href="#npm_translate_lock-yq_toolchain_prefix">yq_toolchain_prefix</a>, <a href="#npm_translate_lock-preupdate">preupdate</a>, <a href="#npm_translate_lock-npmrc">npmrc</a>, <a href="#npm_translate_lock-use_home_npmrc">use_home_npmrc</a>, <a href="#npm_translate_lock-data">data</a>,
                    <a href="#npm_translate_lock-patches">patches</a>, <a href="#npm_translate_lock-patch_args">patch_args</a>, <a href="#npm_translate_lock-custom_postinstalls">custom_postinstalls</a>, <a href="#npm_translate_lock-package_visibility">package_visibility</a>, <a href="#npm_translate_lock-prod">prod</a>,
@@ -66,9 +70,7 @@ npm_translate_lock(<a href="#npm_translate_lock-name">name</a>, <a href="#npm_tr
                    <a href="#npm_translate_lock-lifecycle_hooks_use_default_shell_env">lifecycle_hooks_use_default_shell_env</a>, <a href="#npm_translate_lock-replace_packages">replace_packages</a>, <a href="#npm_translate_lock-bins">bins</a>,
                    <a href="#npm_translate_lock-verify_node_modules_ignored">verify_node_modules_ignored</a>, <a href="#npm_translate_lock-verify_patches">verify_patches</a>, <a href="#npm_translate_lock-quiet">quiet</a>,
                    <a href="#npm_translate_lock-external_repository_action_cache">external_repository_action_cache</a>, <a href="#npm_translate_lock-link_workspace">link_workspace</a>, <a href="#npm_translate_lock-pnpm_version">pnpm_version</a>, <a href="#npm_translate_lock-use_pnpm">use_pnpm</a>,
-                   <a href="#npm_translate_lock-register_copy_directory_toolchains">register_copy_directory_toolchains</a>, <a href="#npm_translate_lock-register_copy_to_directory_toolchains">register_copy_to_directory_toolchains</a>,
-                   <a href="#npm_translate_lock-register_yq_toolchains">register_yq_toolchains</a>, <a href="#npm_translate_lock-register_tar_toolchains">register_tar_toolchains</a>, <a href="#npm_translate_lock-npm_package_target_name">npm_package_target_name</a>,
-                   <a href="#npm_translate_lock-use_starlark_yaml_parser">use_starlark_yaml_parser</a>, <a href="#npm_translate_lock-package_json">package_json</a>, <a href="#npm_translate_lock-warn_on_unqualified_tarball_url">warn_on_unqualified_tarball_url</a>, <a href="#npm_translate_lock-kwargs">kwargs</a>)
+                   <a href="#npm_translate_lock-npm_package_target_name">npm_package_target_name</a>, <a href="#npm_translate_lock-kwargs">kwargs</a>)
 </pre>
 
 Repository macro to generate starlark code from a lock file.
@@ -101,7 +103,7 @@ For more about how to use npm_translate_lock, read [pnpm and rules_js](/docs/pnp
 | <a id="npm_translate_lock-pnpm_lock"></a>pnpm_lock |  The `pnpm-lock.yaml` file.   |  `None` |
 | <a id="npm_translate_lock-npm_package_lock"></a>npm_package_lock |  The `package-lock.json` file written by `npm install`.<br><br>Only one of `npm_package_lock` or `yarn_lock` may be set.   |  `None` |
 | <a id="npm_translate_lock-yarn_lock"></a>yarn_lock |  The `yarn.lock` file written by `yarn install`.<br><br>Only one of `npm_package_lock` or `yarn_lock` may be set.   |  `None` |
-| <a id="npm_translate_lock-update_pnpm_lock"></a>update_pnpm_lock |  When True, the pnpm lock file will be updated automatically when any of its inputs have changed since the last update.<br><br>Defaults to True when one of `npm_package_lock` or `yarn_lock` are set. Otherwise it defaults to False.<br><br>Read more: [using update_pnpm_lock](/docs/pnpm.md#update_pnpm_lock)   |  `None` |
+| <a id="npm_translate_lock-update_pnpm_lock"></a>update_pnpm_lock |  When True, the pnpm lock file will be updated automatically when any of its inputs have changed since the last update.<br><br>Defaults to True when one of `npm_package_lock` or `yarn_lock` are set. Otherwise it defaults to False.<br><br>Read more: [using update_pnpm_lock](/docs/pnpm.md#update_pnpm_lock)   |  `False` |
 | <a id="npm_translate_lock-node_toolchain_prefix"></a>node_toolchain_prefix |  the prefix of the node toolchain to use when generating the pnpm lockfile.   |  `"nodejs"` |
 | <a id="npm_translate_lock-yq_toolchain_prefix"></a>yq_toolchain_prefix |  the prefix of the yq toolchain to use for parsing the pnpm lockfile.   |  `"yq"` |
 | <a id="npm_translate_lock-preupdate"></a>preupdate |  Node.js scripts to run in this repository rule before auto-updating the pnpm lock file.<br><br>Scripts are run sequentially in the order they are listed. The working directory is set to the root of the external repository. Make sure all files required by preupdate scripts are added to the `data` attribute.<br><br>A preupdate script could, for example, transform `resolutions` in the root `package.json` file from a format that yarn understands such as `@foo/**/bar` to the equivalent `@foo/*>bar` that pnpm understands so that `resolutions` are compatible with pnpm when running `pnpm import` to update the pnpm lock file.<br><br>Only needed when `update_pnpm_lock` is True. Read more: [using update_pnpm_lock](/docs/pnpm.md#update_pnpm_lock)   |  `[]` |
@@ -130,16 +132,9 @@ For more about how to use npm_translate_lock, read [pnpm and rules_js](/docs/pnp
 | <a id="npm_translate_lock-quiet"></a>quiet |  Set to False to print info logs and output stdout & stderr of pnpm lock update actions to the console.   |  `True` |
 | <a id="npm_translate_lock-external_repository_action_cache"></a>external_repository_action_cache |  The location of the external repository action cache to write to when `update_pnpm_lock` = True.   |  `".aspect/rules/external_repository_action_cache"` |
 | <a id="npm_translate_lock-link_workspace"></a>link_workspace |  The workspace name where links will be created for the packages in this lock file.<br><br>This is typically set in rule sets and libraries that vendor the starlark generated by npm_translate_lock so the link_workspace passed to npm_import is set correctly so that links are created in the external repository and not the user workspace.<br><br>Can be left unspecified if the link workspace is the user workspace.   |  `None` |
-| <a id="npm_translate_lock-pnpm_version"></a>pnpm_version |  pnpm version to use when generating the @pnpm repository. Set to None to not create this repository.<br><br>Can be left unspecified and the rules_js default `LATEST_PNPM_VERSION` will be used.   |  `"8.15.3"` |
+| <a id="npm_translate_lock-pnpm_version"></a>pnpm_version |  pnpm version to use when generating the @pnpm repository. Set to None to not create this repository.<br><br>Can be left unspecified and the rules_js default `DEFAULT_PNPM_VERSION` will be used.   |  `"8.15.9"` |
 | <a id="npm_translate_lock-use_pnpm"></a>use_pnpm |  label of the pnpm entry point to use.   |  `None` |
-| <a id="npm_translate_lock-register_copy_directory_toolchains"></a>register_copy_directory_toolchains |  if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_copy_directory_toolchains()` is called if the toolchain is not already registered   |  `True` |
-| <a id="npm_translate_lock-register_copy_to_directory_toolchains"></a>register_copy_to_directory_toolchains |  if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_copy_to_directory_toolchains()` is called if the toolchain is not already registered   |  `True` |
-| <a id="npm_translate_lock-register_yq_toolchains"></a>register_yq_toolchains |  if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_yq_toolchains()` is called if the toolchain is not already registered   |  `True` |
-| <a id="npm_translate_lock-register_tar_toolchains"></a>register_tar_toolchains |  if True, `@aspect_bazel_lib//lib:repositories.bzl` `register_tar_toolchains()` is called if the toolchain is not already registered   |  `True` |
-| <a id="npm_translate_lock-npm_package_target_name"></a>npm_package_target_name |  The name of linked `npm_package` targets. When `npm_package` targets are linked as pnpm workspace packages, the name of the target must align with this value.<br><br>The `{dirname}` placeholder is replaced with the directory name of the target.<br><br>By default the directory name of the target is used.<br><br>Default: `{dirname}`   |  `"{dirname}"` |
-| <a id="npm_translate_lock-use_starlark_yaml_parser"></a>use_starlark_yaml_parser |  Opt-out of using `yq` to parse the pnpm-lock file which was added in https://github.com/aspect-build/rules_js/pull/1458 and use the legacy starlark yaml parser instead.<br><br>This opt-out is a return safety in cases where yq is not able to parse the pnpm generated yaml file. For example, this has been observed to happen due to a line such as the following in the pnpm generated lock file:<br><br><pre><code>resolution: {tarball: https://gitpkg.vercel.app/blockprotocol/blockprotocol/packages/%40blockprotocol/type-system-web?6526c0e}</code></pre><br><br>where the `?` character in the `tarball` value causes `yq` to fail with:<br><br><pre><code>$ yq pnpm-lock.yaml -o=json&#10;Error: bad file 'pnpm-lock.yaml': yaml: line 7129: did not find expected ',' or '}'</code></pre><br><br>If the tarball value is quoted or escaped then yq would accept it but as of this writing, the latest version of pnpm (8.14.3) does not quote or escape such a value and the latest version of yq (4.40.5) does not handle it as is.<br><br>Possibly related to https://github.com/pnpm/pnpm/issues/5414.   |  `False` |
-| <a id="npm_translate_lock-package_json"></a>package_json |  Deprecated.<br><br>Add all `package.json` files that are part of the workspace to `data` instead.   |  `None` |
-| <a id="npm_translate_lock-warn_on_unqualified_tarball_url"></a>warn_on_unqualified_tarball_url |  Deprecated. Will be removed in next major release.   |  `None` |
+| <a id="npm_translate_lock-npm_package_target_name"></a>npm_package_target_name |  The name of linked `npm_package`, `js_library` or `JsInfo` producing targets.<br><br>When targets are linked as pnpm workspace packages, the name of the target must align with this value.<br><br>The `{dirname}` placeholder is replaced with the directory name of the target.   |  `"pkg"` |
 | <a id="npm_translate_lock-kwargs"></a>kwargs |  Internal use only   |  none |
 
 

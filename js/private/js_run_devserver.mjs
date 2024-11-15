@@ -52,9 +52,9 @@ export function isNodeModulePath(p) {
     return false
 }
 
-// Determines if a file path is a 1p dep in the virtual store.
+// Determines if a file path is a 1p dep in the package store.
 // See js/private/test/js_run_devserver/js_run_devserver.spec.mjs for examples.
-export function is1pVirtualStoreDep(p) {
+export function is1pPackageStoreDep(p) {
     // unscoped1p: https://regex101.com/r/hBR08J/1
     const unscoped1p =
         /^.+\/\.aspect_rules_js\/([^@\/]+)@0\.0\.0\/node_modules\/\1$/
@@ -246,27 +246,86 @@ async function syncRecursive(src, dst, sandbox, writePerm) {
     }
 }
 
-// Sync list of files to the sandbox
-async function sync(files, sandbox, writePerm) {
-    console.error(`Syncing ${files.length} files && folders...`)
+// Delete files from sandbox
+async function deleteFiles(previousFiles, updatedFiles, sandbox) {
     const startTime = perf_hooks.performance.now()
 
-    const [virtualStore1pFiles, remainingFiles] = partitionArray(
+    let totalDeleted = 0
+
+    // Remove files that were previously synced but are no longer in the updated list of files to sync
+    const updatedFilesSet = new Set(updatedFiles)
+    for (const f of previousFiles) {
+        if (updatedFilesSet.has(f)) {
+            continue
+        }
+
+        console.error(`Deleting ${f}`)
+
+        // clear any matching files or files rooted at this folder from the
+        // syncedTime and syncedChecksum maps
+        const srcPath = path.join(RUNFILES_ROOT, f)
+        for (const k of syncedTime.keys()) {
+            if (k == srcPath || k.startsWith(srcPath + '/')) {
+                syncedTime.delete(k)
+            }
+        }
+        for (const k of syncedChecksum.keys()) {
+            if (k == srcPath || k.startsWith(srcPath + '/')) {
+                syncedChecksum.delete(k)
+            }
+        }
+
+        // clear mkdirs if we have deleted any files so we re-populate on next sync
+        mkdirs.clear()
+
+        const rmPath = path.join(sandbox, f)
+        try {
+            fs.rmSync(rmPath, { recursive: true, force: true })
+        } catch (e) {
+            console.error(
+                `An error has occurred while deleting the synced file ${rmPath}. Error: ${e}`
+            )
+        }
+        totalDeleted++
+    }
+
+    var endTime = perf_hooks.performance.now()
+
+    if (totalDeleted > 0) {
+        console.error(
+            `${totalDeleted} file${totalDeleted > 1 ? 's' : ''}/folder${
+                totalDeleted > 1 ? 's' : ''
+            } deleted in ${Math.round(endTime - startTime)} ms`
+        )
+    }
+}
+
+// Sync list of files to the sandbox
+async function syncFiles(files, sandbox, writePerm) {
+    console.error(`+ Syncing ${files.length} files && folders...`)
+    const startTime = perf_hooks.performance.now()
+
+    const [nodeModulesFiles, otherFiles] = partitionArray(
         files,
-        is1pVirtualStoreDep
+        isNodeModulePath
     )
 
-    if (virtualStore1pFiles.length > 0 && process.env.JS_BINARY__LOG_DEBUG) {
+    const [packageStore1pDeps, otherNodeModulesFiles] = partitionArray(
+        nodeModulesFiles,
+        is1pPackageStoreDep
+    )
+
+    // Sync non-node_modules files first since syncing 1p js_library linked node_modules symlinks
+    // requires the files they point to be in place.
+    if (otherFiles.length > 0 && process.env.JS_BINARY__LOG_DEBUG) {
         console.error(
-            `Syncing ${virtualStore1pFiles.length} first party virtual store dep(s)`
+            `+ Syncing ${otherFiles.length} non-node_modules files & folders...`
         )
     }
 
-    // Sync first-party virtual store files first since correctly syncing direct 1p node_modules
-    // symlinks depends on checking if the virtual store synced files exist.
     let totalSynced = (
         await Promise.all(
-            virtualStore1pFiles.map(async (file) => {
+            otherFiles.map(async (file) => {
                 const src = path.join(RUNFILES_ROOT, file)
                 const dst = path.join(sandbox, file)
                 return await syncRecursive(src, dst, sandbox, writePerm)
@@ -274,15 +333,34 @@ async function sync(files, sandbox, writePerm) {
         )
     ).reduce((s, t) => s + t, 0)
 
-    if (remainingFiles.length > 0 && process.env.JS_BINARY__LOG_DEBUG) {
+    // Sync first-party package store files before other node_modules files since correctly syncing
+    // direct 1p node_modules symlinks depends on checking if the package store synced files exist.
+    if (packageStore1pDeps.length > 0 && process.env.JS_BINARY__LOG_DEBUG) {
         console.error(
-            `Syncing ${remainingFiles.length} other files && folders...`
+            `+ Syncing ${packageStore1pDeps.length} first party package store dep(s)`
         )
     }
 
     totalSynced += (
         await Promise.all(
-            remainingFiles.map(async (file) => {
+            packageStore1pDeps.map(async (file) => {
+                const src = path.join(RUNFILES_ROOT, file)
+                const dst = path.join(sandbox, file)
+                return await syncRecursive(src, dst, sandbox, writePerm)
+            })
+        )
+    ).reduce((s, t) => s + t, 0)
+
+    // Finally sync all remaining node_modules files
+    if (otherNodeModulesFiles.length > 0 && process.env.JS_BINARY__LOG_DEBUG) {
+        console.error(
+            `+ Syncing ${otherNodeModulesFiles.length} other node_modules files`
+        )
+    }
+
+    totalSynced += (
+        await Promise.all(
+            otherNodeModulesFiles.map(async (file) => {
                 const src = path.join(RUNFILES_ROOT, file)
                 const dst = path.join(sandbox, file)
                 return await syncRecursive(src, dst, sandbox, writePerm)
@@ -307,7 +385,7 @@ async function main(args, sandbox) {
 
     const config = JSON.parse(await fs.promises.readFile(configPath))
 
-    await sync(
+    await syncFiles(
         config.data_files,
         sandbox,
         config.grant_sandbox_write_permissions
@@ -378,14 +456,25 @@ async function main(args, sandbox) {
                         console.error('IBAZEL_BUILD_COMPLETED SUCCESS')
                     }
                     // Chain promises via syncing.then()
-                    syncing = syncing.then(() =>
-                        sync(
-                            // Re-parse the config file to get the latest list of data files to copy
-                            JSON.parse(fs.readFileSync(configPath)).data_files,
+                    syncing = syncing.then(() => {
+                        // Re-parse the config file to get the latest list of data files to copy
+                        const updatedDataFiles = JSON.parse(
+                            fs.readFileSync(configPath)
+                        ).data_files
+                        // Remove files that were previously synced but are no longer in the updated list of files to sync
+                        deleteFiles(
+                            config.data_files,
+                            updatedDataFiles,
+                            sandbox
+                        )
+                        // Sync changed files
+                        config.data_files = updatedDataFiles
+                        syncFiles(
+                            config.data_files,
                             sandbox,
                             config.grant_sandbox_write_permissions
                         )
-                    )
+                    })
                     // Await promise to catch any exceptions, and wait for the
                     // sync to be complete before writing to stdin of the child
                     // process

@@ -6,7 +6,11 @@ load(":versions.bzl", "PNPM_VERSIONS")
 
 LATEST_PNPM_VERSION = PNPM_VERSIONS.keys()[-1]
 
-def pnpm_repository(name, pnpm_version = LATEST_PNPM_VERSION):
+# Default to the latest pnpm v8 since pnpm v9 has breaking changes in the lockfile that have not yet been
+# tested at scale to ensure all corner cases are covered in the wild.
+DEFAULT_PNPM_VERSION = [v for v in PNPM_VERSIONS.keys() if v.startswith("8")][-1]
+
+def pnpm_repository(name, pnpm_version = DEFAULT_PNPM_VERSION):
     """Import https://npmjs.com/package/pnpm and provide a js_binary to run the tool.
 
     Useful as a way to run exactly the same pnpm as Bazel does, for example with:
@@ -40,6 +44,4 @@ def pnpm_repository(name, pnpm_version = LATEST_PNPM_VERSION):
                 """js_binary(name = "pnpm", data = glob(["package/**"]), entry_point = "package/dist/pnpm.cjs", visibility = ["//visibility:public"])""",
             ]),
             extract_full_archive = True,
-            register_copy_directory_toolchains = False,  # this code path should work for both WORKSPACE and bzlmod
-            register_copy_to_directory_toolchains = False,  # this code path should work for both WORKSPACE and bzlmod
         )
