@@ -122,6 +122,23 @@ def npm_imported_package_store(name):
     )
 """
 
+# NOTE(calebmer): (This comment refers to the
+# `{lifecycle_hooks_env} | select({})` change we patch in below).
+#
+# Some npm packages like `utf-8-validate` and `bufferutil` have native C code
+# that's compiled in a lifecycle hook (e.g. `postinstall`) by
+# `node-gyp rebuild`. `aspect_rules_js` is smart enough to set
+# `npm_config_arch=x64` (used by `node-gyp-build`) which makes sure to pass the
+# right arguments to the C compiler for cross compilation. But it's not smart
+# enough to configure the right cross-compiler `CC` and `CXX` tools. So we get
+# an error as we try to use options for the x86_64 C compiler with the host's
+# arm64 C compiler.
+#
+# We install x86_64 cross compilers on our arm64 Linux GitHub runner with
+# `apt-get install crossbuild-essential-amd64`. This gives us a cross compiler
+# at `/usr/bin/x86_64-linux-gnu-gcc`. Next, we need to set the `CC` and `CXX`
+# environment variables so `node-gyp` in a lifecycle hook can use the right C
+# compiler. We do that here.
 _LINK_JS_PACKAGE_LIFECYCLE_TMPL = """\
     lc_deps = {lc_deps}
 
@@ -189,7 +206,17 @@ _LINK_JS_PACKAGE_LIFECYCLE_TMPL = """\
         execution_requirements = {lifecycle_hooks_execution_requirements},
         mnemonic = "NpmLifecycleHook",
         progress_message = "Running lifecycle hooks on npm package {package}@{version}",
-        env = {lifecycle_hooks_env},{maybe_use_default_shell_env}
+        env = {lifecycle_hooks_env} | select({{
+            "@aspect_rules_js//platforms/os:linux_host_and_cpu_arm64": {{
+                "CC": "/usr/bin/aarch64-linux-gnu-gcc",
+                "CXX": "/usr/bin/aarch64-linux-gnu-g++",
+            }},
+            "@aspect_rules_js//platforms/os:linux_host_and_cpu_x86_64": {{
+                "CC": "/usr/bin/x86_64-linux-gnu-gcc",
+                "CXX": "/usr/bin/x86_64-linux-gnu-g++",
+            }},
+            "//conditions:default": {{}},
+        }}),{maybe_use_default_shell_env}
     )
 
     # post-lifecycle npm_package

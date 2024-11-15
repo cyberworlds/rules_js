@@ -1,3 +1,6 @@
+load("@host_platform//:constraints.bzl", "HOST_CONSTRAINTS")
+load("@bazel_skylib//lib:selects.bzl", "selects")
+
 alias(
     name = "osx",
     actual = "@platforms//os:osx",
@@ -13,5 +16,45 @@ alias(
 alias(
     name = "windows",
     actual = "@platforms//os:windows",
+    visibility = ["//visibility:public"],
+)
+
+# NOTE(calebmer): Constraint that checks:
+#
+# - Host:
+#     - OS: Linux
+# - Target:
+#     - OS: Linux
+#     - CPU: arm64
+#
+# If our host is MacOS then `HOST_CONSTRAINTS` will contain
+# `@platforms//os:osx`. We'll never match both `@platforms//os:linux`
+# AND `@platforms//os:osx`.
+selects.config_setting_group(
+    name = "linux_host_and_cpu_arm64",
+    match_all = [
+        ":linux",
+        "//platforms/cpu:arm64",
+    ] + [constraint for constraint in HOST_CONSTRAINTS if constraint.startswith("@platforms//os:")],
+    visibility = ["//visibility:public"],
+)
+
+# NOTE(calebmer): Constraint that checks:
+#
+# - Host:
+#     - OS: Linux
+# - Target:
+#     - OS: Linux
+#     - CPU: x86_64
+#
+# If our host is MacOS then `HOST_CONSTRAINTS` will contain
+# `@platforms//os:osx`. We'll never match both `@platforms//os:linux`
+# AND `@platforms//os:osx`.
+selects.config_setting_group(
+    name = "linux_host_and_cpu_x86_64",
+    match_all = [
+        ":linux",
+        "//platforms/cpu:x86_64",
+    ] + [constraint for constraint in HOST_CONSTRAINTS if constraint.startswith("@platforms//os:")],
     visibility = ["//visibility:public"],
 )
